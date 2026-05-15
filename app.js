@@ -1524,9 +1524,14 @@ els.deleteApprentice.addEventListener("click", async () => {
   if (!apprentice || !confirm(`Delete ${apprentice.name}?`)) return;
   if (cloudReady && staffSession) {
     setCloudStatus("Deleting apprentice...");
-    const { error } = await trackCloudSave(cloudClient.rpc("delete_apprentice_staff", { input_apprentice_id: apprentice.id }), "Deleting apprentice");
+    const { data, error } = await trackCloudSave(cloudClient.rpc("delete_apprentice_staff", { input_apprentice_id: apprentice.id }), "Deleting apprentice");
     if (error) {
       setCloudStatus(`Could not delete apprentice: ${error.message}`);
+      return;
+    }
+    if (data !== 1) {
+      setCloudStatus("Could not delete apprentice: Supabase did not confirm the delete");
+      await loadStaffData();
       return;
     }
   }
