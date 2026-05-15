@@ -61,6 +61,17 @@ create table if not exists public.one_on_ones (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.apprentice_files (
+  id uuid primary key default gen_random_uuid(),
+  apprentice_id uuid not null references public.apprentices(id) on delete cascade,
+  file_name text not null,
+  file_type text not null default '',
+  file_size integer not null default 0,
+  data_url text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists public.resources (
   id uuid primary key default gen_random_uuid(),
   title text not null,
@@ -91,6 +102,7 @@ alter table public.task_progress enable row level security;
 alter table public.apprentice_questions enable row level security;
 alter table public.staff_notes enable row level security;
 alter table public.one_on_ones enable row level security;
+alter table public.apprentice_files enable row level security;
 alter table public.resources enable row level security;
 
 drop policy if exists "staff can read staff users" on public.staff_users;
@@ -99,6 +111,7 @@ drop policy if exists "staff can manage task progress" on public.task_progress;
 drop policy if exists "staff can manage apprentice questions" on public.apprentice_questions;
 drop policy if exists "staff can manage staff notes" on public.staff_notes;
 drop policy if exists "staff can manage one on ones" on public.one_on_ones;
+drop policy if exists "staff can manage apprentice files" on public.apprentice_files;
 drop policy if exists "staff can manage resources" on public.resources;
 drop policy if exists "anyone can read resources" on public.resources;
 
@@ -131,6 +144,11 @@ on public.one_on_ones for all
 using (public.is_staff())
 with check (public.is_staff());
 
+create policy "staff can manage apprentice files"
+on public.apprentice_files for all
+using (public.is_staff())
+with check (public.is_staff());
+
 create policy "staff can manage resources"
 on public.resources for all
 using (public.is_staff())
@@ -145,8 +163,13 @@ drop function if exists public.get_progress_by_token(text);
 drop function if exists public.get_questions_by_token(text);
 drop function if exists public.get_one_on_ones_by_token(text);
 drop function if exists public.add_question_by_token(text, text);
+drop function if exists public.get_files_by_token(text);
+drop function if exists public.get_staff_files();
+drop function if exists public.save_file_staff(uuid, text, text, integer, text);
+drop function if exists public.delete_file_staff(uuid);
 drop function if exists public.save_task_progress(uuid, text, boolean, date, text, text, text);
 drop function if exists public.delete_apprentice_staff(uuid);
+drop function if exists public.update_apprentice_staff(uuid, text, date, text, text);
 drop function if exists public.create_apprentice_staff(text);
 
 create or replace function public.get_apprentice_by_token(token text)
@@ -263,6 +286,53 @@ begin
 end;
 $$;
 
+create or replace function public.update_apprentice_staff(
+  input_apprentice_id uuid,
+  input_name text,
+  input_start_date date,
+  input_mentor text,
+  input_current_level text
+)
+returns table (
+  id uuid,
+  name text,
+  start_date date,
+  mentor text,
+  current_level text,
+  share_token text,
+  created_at timestamptz,
+  updated_at timestamptz
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_staff() then
+    raise exception 'Staff access required';
+  end if;
+
+  return query
+  update public.apprentices
+  set
+    name = trim(input_name),
+    start_date = input_start_date,
+    mentor = nullif(trim(coalesce(input_mentor, '')), ''),
+    current_level = coalesce(nullif(input_current_level, ''), 'level-1'),
+    updated_at = now()
+  where apprentices.id = input_apprentice_id
+  returning
+    apprentices.id,
+    apprentices.name,
+    apprentices.start_date,
+    apprentices.mentor,
+    apprentices.current_level,
+    apprentices.share_token,
+    apprentices.created_at,
+    apprentices.updated_at;
+end;
+$$;
+
 create or replace function public.save_task_progress(
   input_apprentice_id uuid,
   input_task_key text,
@@ -375,6 +445,27 @@ as $$
   order by o.meeting_date desc, o.created_at desc;
 $$;
 
+create or replace function public.get_staff_files()
+returns table (
+  id uuid,
+  apprentice_id uuid,
+  file_name text,
+  file_type text,
+  file_size integer,
+  data_url text,
+  created_at timestamptz
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select f.id, f.apprentice_id, f.file_name, f.file_type, f.file_size, f.data_url, f.created_at
+  from public.apprentice_files f
+  where public.is_staff()
+  order by f.created_at desc;
+$$;
+
 create or replace function public.save_one_on_one_staff(
   input_apprentice_id uuid,
   input_meeting_id uuid,
@@ -417,6 +508,37 @@ begin
 end;
 $$;
 
+create or replace function public.save_file_staff(
+  input_apprentice_id uuid,
+  input_file_name text,
+  input_file_type text,
+  input_file_size integer,
+  input_data_url text
+)
+returns table (
+  id uuid,
+  file_name text,
+  file_type text,
+  file_size integer,
+  data_url text,
+  created_at timestamptz
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_staff() then
+    raise exception 'Staff access required';
+  end if;
+
+  return query
+  insert into public.apprentice_files (apprentice_id, file_name, file_type, file_size, data_url)
+  values (input_apprentice_id, input_file_name, coalesce(input_file_type, ''), coalesce(input_file_size, 0), input_data_url)
+  returning apprentice_files.id, apprentice_files.file_name, apprentice_files.file_type, apprentice_files.file_size, apprentice_files.data_url, apprentice_files.created_at;
+end;
+$$;
+
 create or replace function public.delete_one_on_one_staff(input_meeting_id uuid)
 returns void
 language plpgsql
@@ -430,6 +552,22 @@ begin
 
   delete from public.one_on_ones
   where id = input_meeting_id;
+end;
+$$;
+
+create or replace function public.delete_file_staff(input_file_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_staff() then
+    raise exception 'Staff access required';
+  end if;
+
+  delete from public.apprentice_files
+  where id = input_file_id;
 end;
 $$;
 
@@ -451,6 +589,27 @@ as $$
   join public.apprentices a on a.id = o.apprentice_id
   where a.share_token = input_token
   order by o.meeting_date desc, o.created_at desc;
+$$;
+
+create or replace function public.get_files_by_token(input_token text)
+returns table (
+  id uuid,
+  file_name text,
+  file_type text,
+  file_size integer,
+  data_url text,
+  created_at timestamptz
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select f.id, f.file_name, f.file_type, f.file_size, f.data_url, f.created_at
+  from public.apprentice_files f
+  join public.apprentices a on a.id = f.apprentice_id
+  where a.share_token = input_token
+  order by f.created_at desc;
 $$;
 
 create or replace function public.add_question_by_token(input_token text, question_body text)
@@ -481,16 +640,21 @@ $$;
 
 grant execute on function public.create_apprentice_staff(text) to authenticated;
 grant execute on function public.delete_apprentice_staff(uuid) to authenticated;
+grant execute on function public.update_apprentice_staff(uuid, text, date, text, text) to authenticated;
 grant execute on function public.save_task_progress(uuid, text, boolean, date, text, text, text) to authenticated;
 grant execute on function public.get_staff_apprentices() to authenticated;
 grant execute on function public.get_staff_task_progress() to authenticated;
 grant execute on function public.get_staff_one_on_ones() to authenticated;
+grant execute on function public.get_staff_files() to authenticated;
 grant execute on function public.save_one_on_one_staff(uuid, uuid, date, text, text) to authenticated;
 grant execute on function public.delete_one_on_one_staff(uuid) to authenticated;
+grant execute on function public.save_file_staff(uuid, text, text, integer, text) to authenticated;
+grant execute on function public.delete_file_staff(uuid) to authenticated;
 grant execute on function public.get_apprentice_by_token(text) to anon, authenticated;
 grant execute on function public.get_progress_by_token(text) to anon, authenticated;
 grant execute on function public.get_questions_by_token(text) to anon, authenticated;
 grant execute on function public.get_one_on_ones_by_token(text) to anon, authenticated;
+grant execute on function public.get_files_by_token(text) to anon, authenticated;
 grant execute on function public.add_question_by_token(text, text) to anon, authenticated;
 
 notify pgrst, 'reload schema';

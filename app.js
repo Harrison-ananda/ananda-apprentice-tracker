@@ -467,6 +467,17 @@ function dbOneOnOneToApp(row) {
   };
 }
 
+function dbFileToApp(row) {
+  return {
+    id: row.id,
+    name: row.file_name || "",
+    type: row.file_type || "",
+    size: row.file_size || 0,
+    dataUrl: row.data_url || "",
+    addedAt: row.created_at || new Date().toISOString(),
+  };
+}
+
 function dbResourceToApp(row) {
   return {
     id: row.id,
@@ -624,6 +635,7 @@ async function loadStaffData() {
   let questionRows;
   let noteRows;
   let oneOnOneRows;
+  let fileRows;
   let resourceRows;
   try {
     const results = await withTimeout(
@@ -633,6 +645,7 @@ async function loadStaffData() {
         cloudClient.from("apprentice_questions").select("*").order("created_at", { ascending: false }),
         cloudClient.from("staff_notes").select("*").order("created_at", { ascending: false }),
         cloudClient.rpc("get_staff_one_on_ones"),
+        cloudClient.rpc("get_staff_files"),
         cloudClient.from("resources").select("*").order("sort_order").order("title"),
       ]),
       "Tracker data load timed out.",
@@ -645,7 +658,8 @@ async function loadStaffData() {
     questionRows = results[2].data;
     noteRows = results[3].data;
     oneOnOneRows = results[4].data;
-    resourceRows = results[5].data;
+    fileRows = results[5].data;
+    resourceRows = results[6].data;
     const loadError = results.find((result) => result.error)?.error;
     if (loadError) throw new Error(loadError.message);
   } catch (error) {
@@ -680,6 +694,10 @@ async function loadStaffData() {
     const apprentice = byId.get(row.apprentice_id);
     if (apprentice) apprentice.oneOnOnes.push(dbOneOnOneToApp(row));
   });
+  (fileRows || []).forEach((row) => {
+    const apprentice = byId.get(row.apprentice_id);
+    if (apprentice) apprentice.files.push(dbFileToApp(row));
+  });
   activeId = activeId && byId.has(activeId) ? activeId : state.apprentices[0]?.id || null;
   state.apprentices.forEach(ensureApprenticeShape);
   setCloudStatus(`Live mode connected: ${state.apprentices.length} apprentices, ${(progressRows || []).length} saved checkoffs`);
@@ -694,6 +712,7 @@ async function loadApprenticeLinkData() {
   let progressRows;
   let questionRows;
   let oneOnOneRows;
+  let fileRows;
   let resourceRows;
   try {
     const results = await withTimeout(
@@ -734,6 +753,8 @@ async function loadApprenticeLinkData() {
   apprentice.questions = (questionRows || []).map(dbQuestionToApp);
   const oneOnOneResult = await rpcWithApprenticeToken("get_one_on_ones_by_token").catch((error) => ({ error }));
   apprentice.oneOnOnes = oneOnOneResult?.error ? [] : (oneOnOneResult.data || []).map(dbOneOnOneToApp);
+  const fileResult = await rpcWithApprenticeToken("get_files_by_token").catch((error) => ({ error }));
+  apprentice.files = fileResult?.error ? [] : (fileResult.data || []).map(dbFileToApp);
   state.apprentices = [apprentice];
   state.resources = (resourceRows || []).map(dbResourceToApp);
   activeId = apprentice.id;
@@ -1076,21 +1097,24 @@ async function updateTask(taskKey, field, value, sourceRow = null) {
   await saveTaskCloud(apprentice, taskKey);
 }
 
-function addFiles(files) {
+async function addFiles(files) {
   const apprentice = activeApprentice();
   if (!apprentice) return;
   [...files].forEach((file) => {
     const reader = new FileReader();
-    reader.onload = () => {
-      apprentice.files.unshift({
+    reader.onload = async () => {
+      const uploadedFile = {
         id: crypto.randomUUID(),
         name: file.name,
         type: file.type,
         size: file.size,
         dataUrl: reader.result,
         addedAt: new Date().toISOString(),
-      });
+      };
+      apprentice.files.unshift(uploadedFile);
       saveState();
+      renderFiles(apprentice);
+      await saveFileCloud(apprentice, uploadedFile);
       renderFiles(apprentice);
     };
     reader.readAsDataURL(file);
@@ -1099,7 +1123,30 @@ function addFiles(files) {
 
 async function saveApprenticeCloud(apprentice) {
   if (!cloudReady || !staffSession) return;
-  await trackCloudSave(cloudClient.from("apprentices").update(appApprenticeToDb(apprentice)).eq("id", apprentice.id), "Saving apprentice");
+  const { data, error } = await trackCloudSave(
+    cloudClient.rpc("update_apprentice_staff", {
+      input_apprentice_id: apprentice.id,
+      input_name: apprentice.name,
+      input_start_date: apprentice.startDate || null,
+      input_mentor: apprentice.mentor || null,
+      input_current_level: apprentice.currentLevel || "level-1",
+    }),
+    "Saving apprentice",
+  );
+  const savedRow = Array.isArray(data) ? data[0] : data;
+  if (!error && savedRow) {
+    const savedProgress = apprentice.progress;
+    const savedNotes = apprentice.notes;
+    const savedOneOnOnes = apprentice.oneOnOnes;
+    const savedQuestions = apprentice.questions;
+    const savedFiles = apprentice.files;
+    Object.assign(apprentice, dbApprenticeToApp(savedRow));
+    apprentice.progress = savedProgress;
+    apprentice.notes = savedNotes;
+    apprentice.oneOnOnes = savedOneOnOnes;
+    apprentice.questions = savedQuestions;
+    apprentice.files = savedFiles;
+  }
 }
 
 async function saveTaskCloud(apprentice, taskKey) {
@@ -1197,6 +1244,26 @@ async function saveOneOnOneCloud(apprentice, meeting) {
   const { data, error } = await trackCloudSave(cloudClient.rpc("save_one_on_one_staff", payload), "Saving one-on-one");
   const savedRow = Array.isArray(data) ? data[0] : data;
   if (savedRow) Object.assign(meeting, dbOneOnOneToApp(savedRow));
+  return error;
+}
+
+async function saveFileCloud(apprentice, file) {
+  if (!cloudReady || !staffSession) {
+    setCloudStatus("File added on this screen, but live saving is not connected.");
+    return { message: "Live saving is not connected" };
+  }
+  const { data, error } = await trackCloudSave(
+    cloudClient.rpc("save_file_staff", {
+      input_apprentice_id: apprentice.id,
+      input_file_name: file.name || "Uploaded file",
+      input_file_type: file.type || "",
+      input_file_size: Number(file.size || 0),
+      input_data_url: file.dataUrl || "",
+    }),
+    "Saving file",
+  );
+  const savedRow = Array.isArray(data) ? data[0] : data;
+  if (savedRow) Object.assign(file, dbFileToApp(savedRow));
   return error;
 }
 
@@ -1481,11 +1548,15 @@ els.profileFileUpload.addEventListener("change", (event) => {
   event.target.value = "";
 });
 
-els.filesList.addEventListener("click", (event) => {
+els.filesList.addEventListener("click", async (event) => {
   if (isApprenticeMode) return;
   if (!event.target.matches("[data-action='delete-file']")) return;
   const apprentice = activeApprentice();
   const id = event.target.closest("[data-file]").dataset.file;
+  if (cloudReady && staffSession && /^[0-9a-f-]{36}$/i.test(id)) {
+    const { error } = await trackCloudSave(cloudClient.rpc("delete_file_staff", { input_file_id: id }), "Deleting file");
+    if (error) return;
+  }
   apprentice.files = apprentice.files.filter((file) => file.id !== id);
   saveState();
   renderFiles(apprentice);
