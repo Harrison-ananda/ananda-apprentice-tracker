@@ -153,7 +153,8 @@ label {
 }
 
 :root[data-theme="dark"] .login-logo,
-:root[data-theme="dark"] .brand-logo {
+:root[data-theme="dark"] .brand-logo,
+:root[data-theme="dark"] .apprentice-brand-logo {
   content: url("ananda-logo-white.svg");
 }
 
@@ -435,6 +436,10 @@ body.auth-required .app-shell {
 .profile {
   display: grid;
   gap: 18px;
+}
+
+.apprentice-brand {
+  display: none;
 }
 
 .profile-header {
@@ -887,6 +892,28 @@ body.apprentice-mode .main {
   max-width: 1180px;
   width: 100%;
   margin: 0 auto;
+}
+
+body.apprentice-mode .apprentice-brand {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.apprentice-brand-logo {
+  width: min(220px, 58vw);
+  height: auto;
+}
+
+.apprentice-brand span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 @media (max-width: 980px) {
