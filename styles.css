@@ -45,27 +45,22 @@ body {
 body::before {
   content: "";
   position: fixed;
-  top: -18vh;
-  right: -18vw;
-  width: min(760px, 70vw);
-  aspect-ratio: 841.9 / 595.3;
-  background: url("wavy-lines.svg") center / contain no-repeat;
-  opacity: 0.035;
-  transform: rotate(-18deg);
+  inset: -18vh -18vw;
+  background: url("wavy-lines.svg") center / 130% 130% no-repeat;
+  opacity: 0.03;
+  transform: rotate(-10deg) scale(1.12);
   transform-origin: center;
   pointer-events: none;
   z-index: 0;
 }
 
 :root[data-theme="dark"] body::before {
-  opacity: 0.055;
+  opacity: 0.045;
   filter: invert(1);
 }
 
 body.auth-required::before {
-  top: 8vh;
-  right: 50%;
-  transform: translateX(50%) rotate(-18deg);
+  transform: rotate(-10deg) scale(1.12);
 }
 
 button,
