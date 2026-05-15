@@ -198,7 +198,7 @@ const apprenticeToken = route.get("token");
 const cloudConfig = window.ANANDA_APP_CONFIG || {
   supabaseUrl: "https://plxvpthbyyobrfxvhylu.supabase.co",
   supabaseAnonKey: "sb_publishable_8gbbGBF-2h2IeYf97Dak2w_By08DLVE",
-  appBaseUrl: "https://jolly-puppy-6e68f4.netlify.app/",
+  appBaseUrl: "https://harrison-ananda.github.io/ananda-apprentice-tracker/",
 };
 let cloudClient = null;
 let authListenerReady = false;
@@ -1538,7 +1538,7 @@ els.themeToggle.addEventListener("click", () => {
 els.copyApprenticeLink.addEventListener("click", async () => {
   const apprentice = activeApprentice();
   if (!apprentice) return;
-  const fallbackBase = cloudConfig.appBaseUrl || "https://jolly-puppy-6e68f4.netlify.app/";
+  const fallbackBase = cloudConfig.appBaseUrl || "https://harrison-ananda.github.io/ananda-apprentice-tracker/";
   const url = new URL(window.location.protocol === "file:" ? fallbackBase : window.location.href);
   url.searchParams.set("view", "apprentice");
   url.searchParams.delete("apprentice");
