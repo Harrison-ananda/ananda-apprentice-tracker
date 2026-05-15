@@ -305,7 +305,19 @@ body.auth-required .app-shell {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, var(--accent), var(--accent-3), var(--accent-2));
+  background: var(--progress-color, var(--accent));
+}
+
+.progress-start {
+  --progress-color: var(--accent);
+}
+
+.progress-mid {
+  --progress-color: var(--accent-2);
+}
+
+.progress-good {
+  --progress-color: var(--good);
 }
 
 .backup-tools {

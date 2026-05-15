@@ -536,6 +536,12 @@ function percentFor(apprentice, levelId = null) {
   return ids.length ? Math.round((complete / ids.length) * 100) : 0;
 }
 
+function progressTone(percent) {
+  if (percent >= 50) return "progress-good";
+  if (percent >= 25) return "progress-mid";
+  return "progress-start";
+}
+
 function allTaskIds(levelId = null) {
   return LEVELS.filter((level) => !levelId || level.id === levelId).flatMap((level) =>
     level.sections.flatMap((section) => section.tasks.map((task) => taskId(level.id, section.name, task))),
@@ -795,7 +801,7 @@ function renderApprenticeList() {
             <strong>${escapeHtml(apprentice.name)}</strong>
             <span>${percent}%</span>
           </span>
-          <span class="mini-progress" aria-hidden="true"><span style="width:${percent}%"></span></span>
+          <span class="mini-progress ${progressTone(percent)}" aria-hidden="true"><span style="width:${percent}%"></span></span>
         </button>
       `;
     })
@@ -811,7 +817,7 @@ function renderLevelSummary(apprentice) {
       <div class="level-pill">
         <strong>${escapeHtml(level.title.split(":")[0])}</strong>
         <span>${complete} of ${total} checked off</span>
-        <div class="level-progress" aria-hidden="true"><span style="width:${percent}%"></span></div>
+        <div class="level-progress ${progressTone(percent)}" aria-hidden="true"><span style="width:${percent}%"></span></div>
       </div>
     `;
   }).join("");
