@@ -33,6 +33,22 @@ begin
 end;
 $$;
 
+create or replace function public.delete_apprentice_staff(input_apprentice_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_staff() then
+    raise exception 'Staff access required';
+  end if;
+
+  delete from public.apprentices
+  where id = input_apprentice_id;
+end;
+$$;
+
 create or replace function public.save_task_progress(
   input_apprentice_id uuid,
   input_task_key text,
@@ -281,6 +297,7 @@ end;
 $$;
 
 grant execute on function public.create_apprentice_staff(text) to authenticated;
+grant execute on function public.delete_apprentice_staff(uuid) to authenticated;
 grant execute on function public.save_task_progress(uuid, text, boolean, date, text, text, text) to authenticated;
 grant execute on function public.get_staff_apprentices() to authenticated;
 grant execute on function public.get_staff_task_progress() to authenticated;

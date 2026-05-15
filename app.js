@@ -791,8 +791,10 @@ function renderApprenticeList() {
       const percent = percentFor(apprentice);
       return `
         <button class="apprentice-item ${apprentice.id === activeId ? "active" : ""}" data-id="${apprentice.id}" type="button">
-          <strong>${escapeHtml(apprentice.name)}</strong>
-          <span class="muted">${percent}% complete</span>
+          <span class="apprentice-item-main">
+            <strong>${escapeHtml(apprentice.name)}</strong>
+            <span>${percent}%</span>
+          </span>
           <span class="mini-progress" aria-hidden="true"><span style="width:${percent}%"></span></span>
         </button>
       `;
@@ -1521,11 +1523,17 @@ els.deleteApprentice.addEventListener("click", async () => {
   const apprentice = activeApprentice();
   if (!apprentice || !confirm(`Delete ${apprentice.name}?`)) return;
   if (cloudReady && staffSession) {
-    await cloudClient.from("apprentices").delete().eq("id", apprentice.id);
+    setCloudStatus("Deleting apprentice...");
+    const { error } = await trackCloudSave(cloudClient.rpc("delete_apprentice_staff", { input_apprentice_id: apprentice.id }), "Deleting apprentice");
+    if (error) {
+      setCloudStatus(`Could not delete apprentice: ${error.message}`);
+      return;
+    }
   }
   state.apprentices = state.apprentices.filter((item) => item.id !== apprentice.id);
   activeId = state.apprentices[0]?.id || null;
   saveState();
+  setCloudStatus("Apprentice deleted");
   render();
 });
 

@@ -146,6 +146,7 @@ drop function if exists public.get_questions_by_token(text);
 drop function if exists public.get_one_on_ones_by_token(text);
 drop function if exists public.add_question_by_token(text, text);
 drop function if exists public.save_task_progress(uuid, text, boolean, date, text, text, text);
+drop function if exists public.delete_apprentice_staff(uuid);
 drop function if exists public.create_apprentice_staff(text);
 
 create or replace function public.get_apprentice_by_token(token text)
@@ -238,6 +239,22 @@ begin
     apprentices.share_token,
     apprentices.created_at,
     apprentices.updated_at;
+end;
+$$;
+
+create or replace function public.delete_apprentice_staff(input_apprentice_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_staff() then
+    raise exception 'Staff access required';
+  end if;
+
+  delete from public.apprentices
+  where id = input_apprentice_id;
 end;
 $$;
 
@@ -458,6 +475,7 @@ end;
 $$;
 
 grant execute on function public.create_apprentice_staff(text) to authenticated;
+grant execute on function public.delete_apprentice_staff(uuid) to authenticated;
 grant execute on function public.save_task_progress(uuid, text, boolean, date, text, text, text) to authenticated;
 grant execute on function public.get_staff_apprentices() to authenticated;
 grant execute on function public.get_staff_task_progress() to authenticated;
