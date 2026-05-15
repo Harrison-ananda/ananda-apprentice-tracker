@@ -844,6 +844,11 @@ body.auth-required .app-shell {
   align-items: start;
 }
 
+.entry-actions {
+  display: grid;
+  gap: 8px;
+}
+
 .file-card {
   display: grid;
   grid-template-columns: 1fr auto;

@@ -971,7 +971,10 @@ function renderQuestions(apprentice) {
               ${["Open", "Working on it", "Answered"].map((status) => `<option ${question.status === status ? "selected" : ""}>${status}</option>`).join("")}
             </select>
           </label>
-          <button class="danger ${isApprenticeMode && !apprenticeCanEdit ? "hidden" : ""}" type="button" data-action="delete-question">Delete</button>
+          <div class="entry-actions">
+            <button class="${locked ? "hidden" : ""}" type="button" data-action="save-question">${isApprenticeMode ? "Submit" : "Save"}</button>
+            <button class="danger ${isApprenticeMode && !apprenticeCanEdit ? "hidden" : ""}" type="button" data-action="delete-question">Delete</button>
+          </div>
         </article>
       `;
     })
@@ -1020,7 +1023,10 @@ function renderOneOnOnes(apprentice) {
           Notes
           <textarea data-one-on-one-field="body" placeholder="Conversation notes, next steps, follow-up" ${isApprenticeMode ? "disabled" : ""}>${escapeHtml(meeting.body)}</textarea>
         </label>
-        <button class="danger ${isApprenticeMode ? "hidden" : ""}" type="button" data-action="delete-one-on-one">Delete</button>
+        <div class="entry-actions ${isApprenticeMode ? "hidden" : ""}">
+          <button type="button" data-action="save-one-on-one">Save</button>
+          <button class="danger" type="button" data-action="delete-one-on-one">Delete</button>
+        </div>
       </article>
     `)
     .join("");
@@ -1189,27 +1195,38 @@ async function saveResourceCloud(resource) {
 async function saveQuestionCloud(apprentice, question) {
   if (!cloudReady) return;
   if (isApprenticeMode && apprenticeToken && !/^[0-9a-f-]{36}$/i.test(question.id)) {
-    const first = await cloudClient.rpc("add_question_by_token", { input_token: apprenticeToken, question_body: question.body || "" });
-    if (first.error) await cloudClient.rpc("add_question_by_token", { token: apprenticeToken, question_body: question.body || "" });
+    if (!(question.body || "").trim()) {
+      setCloudStatus("Add a question or focus area before submitting.");
+      return { message: "Question is blank" };
+    }
+    const first = await trackCloudSave(cloudClient.rpc("add_question_by_token", { input_token: apprenticeToken, question_body: question.body || "" }), "Submitting question");
+    if (first.error) {
+      const second = await trackCloudSave(cloudClient.rpc("add_question_by_token", { token: apprenticeToken, question_body: question.body || "" }), "Submitting question");
+      if (second.error) return second.error;
+    }
     await loadApprenticeLinkData();
     renderQuestions(activeApprentice());
-    return;
+    setCloudStatus("Question submitted");
+    return null;
   }
   if (!staffSession) return;
-  const payload = {
-    apprentice_id: apprentice.id,
-    question_date: question.date || new Date().toISOString().slice(0, 10),
-    body: question.body || "",
-    status: question.status || "Open",
-    updated_at: new Date().toISOString(),
-  };
-  if (/^[0-9a-f-]{36}$/i.test(question.id)) {
-    payload.id = question.id;
-    await cloudClient.from("apprentice_questions").upsert(payload);
-  } else {
-    const { data } = await cloudClient.from("apprentice_questions").insert(payload).select("*").single();
-    if (data) Object.assign(question, dbQuestionToApp(data));
+  if (!(question.body || "").trim()) {
+    setCloudStatus("Add a question or focus area before saving.");
+    return { message: "Question is blank" };
   }
+  const { data, error } = await trackCloudSave(
+    cloudClient.rpc("save_question_staff", {
+      input_apprentice_id: apprentice.id,
+      input_question_id: /^[0-9a-f-]{36}$/i.test(question.id) ? question.id : null,
+      input_question_date: question.date || new Date().toISOString().slice(0, 10),
+      input_body: question.body || "",
+      input_status: question.status || "Open",
+    }),
+    "Saving question",
+  );
+  const savedRow = Array.isArray(data) ? data[0] : data;
+  if (!error && savedRow) Object.assign(question, dbQuestionToApp(savedRow));
+  return error;
 }
 
 async function saveNoteCloud(apprentice, note) {
@@ -1427,36 +1444,45 @@ els.addQuestion.addEventListener("click", async () => {
     body: "",
     status: "Open",
   };
-  if (!isApprenticeMode) await saveQuestionCloud(apprentice, question);
   apprentice.questions.unshift(question);
   saveState();
   renderQuestions(apprentice);
 });
 
-els.questionsList.addEventListener("input", async (event) => {
+els.questionsList.addEventListener("input", (event) => {
   const card = event.target.closest("[data-question]");
   if (!card || !event.target.dataset.questionField) return;
   const apprentice = activeApprentice();
   const question = apprentice.questions.find((item) => item.id === card.dataset.question);
   question[event.target.dataset.questionField] = event.target.value;
   saveState();
-  if (!isApprenticeMode) await saveQuestionCloud(apprentice, question);
 });
 
-els.questionsList.addEventListener("change", async (event) => {
+els.questionsList.addEventListener("change", (event) => {
   const card = event.target.closest("[data-question]");
   if (!card || !event.target.dataset.questionField) return;
   const apprentice = activeApprentice();
   const question = apprentice.questions.find((item) => item.id === card.dataset.question);
   question[event.target.dataset.questionField] = event.target.value;
   saveState();
-  await saveQuestionCloud(apprentice, question);
 });
 
 els.questionsList.addEventListener("click", async (event) => {
-  if (!event.target.matches("[data-action='delete-question']")) return;
+  const saveButton = event.target.closest("[data-action='save-question']");
+  const deleteButton = event.target.closest("[data-action='delete-question']");
+  if (!saveButton && !deleteButton) return;
   const apprentice = activeApprentice();
-  const id = event.target.closest("[data-question]").dataset.question;
+  const card = event.target.closest("[data-question]");
+  const id = card.dataset.question;
+  const question = apprentice.questions.find((item) => item.id === id);
+  if (saveButton) {
+    const error = await saveQuestionCloud(apprentice, question);
+    if (!error) {
+      saveState();
+      renderQuestions(activeApprentice());
+    }
+    return;
+  }
   if (cloudReady && staffSession && /^[0-9a-f-]{36}$/i.test(id)) {
     await cloudClient.from("apprentice_questions").delete().eq("id", id);
   }
@@ -1514,11 +1540,9 @@ els.addOneOnOne.addEventListener("click", async () => {
   apprentice.oneOnOnes.unshift(meeting);
   saveState();
   renderOneOnOnes(apprentice);
-  const error = await saveOneOnOneCloud(apprentice, meeting);
-  if (!error) renderOneOnOnes(apprentice);
 });
 
-els.oneOnOnesList.addEventListener("input", async (event) => {
+els.oneOnOnesList.addEventListener("input", (event) => {
   if (isApprenticeMode) return;
   const card = event.target.closest("[data-one-on-one]");
   if (!card || !event.target.dataset.oneOnOneField) return;
@@ -1526,14 +1550,25 @@ els.oneOnOnesList.addEventListener("input", async (event) => {
   const meeting = apprentice.oneOnOnes.find((item) => item.id === card.dataset.oneOnOne);
   meeting[event.target.dataset.oneOnOneField] = event.target.value;
   saveState();
-  await saveOneOnOneCloud(apprentice, meeting);
 });
 
 els.oneOnOnesList.addEventListener("click", async (event) => {
   if (isApprenticeMode) return;
-  if (!event.target.matches("[data-action='delete-one-on-one']")) return;
+  const saveButton = event.target.closest("[data-action='save-one-on-one']");
+  const deleteButton = event.target.closest("[data-action='delete-one-on-one']");
+  if (!saveButton && !deleteButton) return;
   const apprentice = activeApprentice();
-  const id = event.target.closest("[data-one-on-one]").dataset.oneOnOne;
+  const card = event.target.closest("[data-one-on-one]");
+  const id = card.dataset.oneOnOne;
+  const meeting = apprentice.oneOnOnes.find((item) => item.id === id);
+  if (saveButton) {
+    const error = await saveOneOnOneCloud(apprentice, meeting);
+    if (!error) {
+      saveState();
+      renderOneOnOnes(apprentice);
+    }
+    return;
+  }
   if (cloudReady && staffSession && /^[0-9a-f-]{36}$/i.test(id)) {
     await trackCloudSave(cloudClient.rpc("delete_one_on_one_staff", { input_meeting_id: id }), "Deleting one-on-one");
   }
