@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ananda apprentice growth tracker</title>
+    <link rel="stylesheet" href="styles.css?v=20260515-github" />
+  </head>
+  <body>
+    <section class="login-screen hidden" id="loginScreen" aria-label="Staff login">
+      <div class="login-card">
+        <img class="login-logo" src="assets/ananda-logo-black.svg" alt="ananda hair studio" />
+        <p class="eyebrow">staff access</p>
+        <h1>apprentice growth tracker</h1>
+        <p class="login-intro">Sign in to manage apprentices, update progress, add notes, and share apprentice view links.</p>
+        <form id="loginScreenForm" class="login-form">
+          <label for="loginEmail">Email</label>
+          <input id="loginEmail" name="loginEmail" type="email" placeholder="you@example.com" autocomplete="email" />
+          <label for="loginPassword">Password</label>
+          <input id="loginPassword" name="loginPassword" type="password" placeholder="Password" autocomplete="current-password" />
+          <button type="submit">Log in</button>
+        </form>
+        <p class="muted" id="loginMessage">Live mode: staff login required</p>
+        <p class="version-stamp">version 2026.05.15.github</p>
+      </div>
+    </section>
+
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Apprentices">
+        <div class="brand">
+          <div>
+            <img class="brand-logo" src="assets/ananda-logo-black.svg" alt="ananda hair studio" />
+            <p class="eyebrow">Education</p>
+            <h1>Apprentice Growth Tracker</h1>
+          </div>
+          <button class="icon-button" id="themeToggle" type="button" aria-label="Toggle theme" title="Toggle theme">
+            <span aria-hidden="true">◐</span>
+          </button>
+        </div>
+
+        <section class="auth-panel" id="authPanel">
+          <p class="eyebrow">Staff access</p>
+          <form id="loginForm" class="hidden">
+            <label for="staffEmail">Email</label>
+            <input id="staffEmail" name="staffEmail" type="email" placeholder="you@example.com" autocomplete="email" />
+            <label for="staffPassword">Password</label>
+            <input id="staffPassword" name="staffPassword" type="password" placeholder="Password" autocomplete="current-password" />
+            <button type="submit">Log in</button>
+          </form>
+          <div class="auth-status hidden" id="authStatus">
+            <span id="authEmail"></span>
+            <button id="signOut" type="button">Sign out</button>
+          </div>
+          <p class="muted" id="cloudStatus">Local preview mode</p>
+          <p class="version-stamp">version 2026.05.15.github</p>
+        </section>
+
+        <form class="add-apprentice" id="addApprenticeForm">
+          <label for="apprenticeName">New apprentice</label>
+          <div class="input-row">
+            <input id="apprenticeName" name="apprenticeName" type="text" placeholder="Name" autocomplete="off" required />
+            <button class="icon-button add" type="submit" aria-label="Add apprentice" title="Add apprentice">+</button>
+          </div>
+        </form>
+
+        <div class="search-wrap">
+          <label for="apprenticeSearch">Search</label>
+          <input id="apprenticeSearch" type="search" placeholder="Find apprentice" autocomplete="off" />
+        </div>
+
+        <div class="apprentice-list" id="apprenticeList" role="list"></div>
+
+        <div class="backup-tools">
+          <button id="copyApprenticeLink" type="button">Copy apprentice link</button>
+        </div>
+      </aside>
+
+      <main class="main" id="mainContent">
+        <section class="empty-state" id="emptyState">
+          <div>
+            <p class="eyebrow">Start here</p>
+            <h2>Add an apprentice to begin tracking their growth.</h2>
+            <p>Developing your eye, hand, and heart through level progress, checkoff details, notes, and files.</p>
+          </div>
+        </section>
+
+        <section class="profile hidden" id="profileView" aria-live="polite">
+          <div class="role-banner hidden" id="roleBanner"></div>
+          <header class="profile-header">
+            <div class="profile-title">
+              <input id="activeName" class="name-input" aria-label="Apprentice name" />
+              <div class="profile-meta">
+                <label>
+                  Start date
+                  <input id="startDate" type="date" />
+                </label>
+                <label>
+                  Current level
+                  <select id="currentLevel"></select>
+                </label>
+                <label>
+                  Mentor
+                  <input id="mentorName" type="text" placeholder="Mentor name" />
+                </label>
+              </div>
+            </div>
+            <div class="profile-actions">
+              <button id="printProfile" type="button">Print</button>
+              <button id="deleteApprentice" class="danger" type="button">Delete</button>
+            </div>
+          </header>
+
+          <section class="progress-band" aria-label="Progress summary">
+            <div class="overall">
+              <span id="overallPercent">0%</span>
+              <p>overall complete</p>
+            </div>
+            <div class="level-summary" id="levelSummary"></div>
+          </section>
+
+          <nav class="tabs" aria-label="Apprentice sections">
+            <button class="active" data-tab="levels" type="button">Levels</button>
+            <button data-tab="resources" type="button">Resources</button>
+            <button data-tab="questions" type="button">Questions</button>
+            <button data-tab="oneOnOnes" type="button">One-on-ones</button>
+            <button data-tab="notes" type="button">Notes</button>
+            <button data-tab="files" type="button">Files</button>
+          </nav>
+
+          <section class="tab-panel" id="levelsPanel"></section>
+
+          <section class="tab-panel hidden" id="resourcesPanel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Program guide</p>
+                <h2>Resources</h2>
+              </div>
+              <button id="addResource" type="button">Add resource</button>
+            </div>
+            <article class="resource-doc">
+              <div>
+                <strong>apprentice program guidelines 2026</strong>
+                <p class="muted">Expectations, program structure, shift types, and policies from the current guide.</p>
+              </div>
+              <a class="resource-link" href="assets/resources/apprentice-program-guidelines-2026.pdf" target="_blank" rel="noreferrer">Open PDF</a>
+            </article>
+            <div id="resourcesList" class="resources-list"></div>
+          </section>
+
+          <section class="tab-panel hidden" id="questionsPanel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Apprentice voice</p>
+                <h2>Questions & things to work on</h2>
+              </div>
+              <button id="addQuestion" type="button">Add item</button>
+            </div>
+            <div id="questionsList" class="questions-list"></div>
+          </section>
+
+          <section class="tab-panel hidden" id="notesPanel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Private coaching log</p>
+                <h2>Notes</h2>
+              </div>
+              <button id="addNote" type="button">Add note</button>
+            </div>
+            <div id="notesList" class="notes-list"></div>
+          </section>
+
+          <section class="tab-panel hidden" id="oneOnOnesPanel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Check-ins</p>
+                <h2>One-on-ones</h2>
+              </div>
+              <button id="addOneOnOne" type="button">Add one-on-one</button>
+            </div>
+            <div id="oneOnOnesList" class="notes-list"></div>
+          </section>
+
+          <section class="tab-panel hidden" id="filesPanel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Photos, forms, examples</p>
+                <h2>Files</h2>
+              </div>
+              <label class="upload-button">
+                Upload files
+                <input id="profileFileUpload" type="file" multiple />
+              </label>
+            </div>
+            <div id="filesList" class="files-list"></div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <template id="levelTemplate">
+      <article class="level-card"></article>
+    </template>
+
+    <script src="app-config.js?v=20260515-github"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="app.js?v=20260515-github"></script>
+  </body>
+</html>
