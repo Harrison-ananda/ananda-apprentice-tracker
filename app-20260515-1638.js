@@ -198,7 +198,6 @@ const apprenticeToken = route.get("token");
 const cloudConfig = window.ANANDA_APP_CONFIG || {
   supabaseUrl: "https://plxvpthbyyobrfxvhylu.supabase.co",
   supabaseAnonKey: "sb_publishable_8gbbGBF-2h2IeYf97Dak2w_By08DLVE",
-  appBaseUrl: "https://harrison-ananda.github.io/ananda-apprentice-tracker/",
 };
 let cloudClient = null;
 let authListenerReady = false;
@@ -207,9 +206,6 @@ let pendingCloudSaves = 0;
 let cloudReady = false;
 let staffSession = null;
 let activeId = route.get("apprentice") || state.activeId || state.apprentices[0]?.id || null;
-let openLevelIds = new Set();
-let apprenticeLinkError = "";
-let undoSnapshot = null;
 
 const els = {
   apprenticeList: document.querySelector("#apprenticeList"),
@@ -256,7 +252,6 @@ const els = {
   profileFileUpload: document.querySelector("#profileFileUpload"),
   exportData: document.querySelector("#exportData"),
   importData: document.querySelector("#importData"),
-  undoLastEdit: document.querySelector("#undoLastEdit"),
   printProfile: document.querySelector("#printProfile"),
   deleteApprentice: document.querySelector("#deleteApprentice"),
   themeToggle: document.querySelector("#themeToggle"),
@@ -346,16 +341,6 @@ function setupAuthListener() {
   });
 }
 
-async function rpcWithApprenticeToken(functionName) {
-  const first = await cloudClient.rpc(functionName, { input_token: apprenticeToken });
-  if (!first.error) return first;
-  const message = first.error.message || "";
-  if (message.includes("input_token") || message.includes("Could not find the function") || first.error.code === "PGRST202") {
-    return cloudClient.rpc(functionName, { token: apprenticeToken });
-  }
-  return first;
-}
-
 function withTimeout(promise, message, ms = 12000) {
   let timer;
   const timeout = new Promise((_, reject) => {
@@ -366,26 +351,23 @@ function withTimeout(promise, message, ms = 12000) {
 
 function trackCloudSave(promise, label = "Saving") {
   pendingCloudSaves += 1;
-  let failed = false;
   setCloudStatus(`${label}...`);
   return withTimeout(promise, `${label} timed out.`, 10000)
     .then((result) => {
       const error = result?.error;
       if (error) {
-        failed = true;
         setCloudStatus(`${label} failed: ${error.message}`);
         return result;
       }
       return result;
     })
     .catch((error) => {
-      failed = true;
       setCloudStatus(`${label} failed: ${error.message}`);
       return { error };
     })
     .finally(() => {
       pendingCloudSaves = Math.max(0, pendingCloudSaves - 1);
-      if (!failed && pendingCloudSaves === 0 && cloudReady) setCloudStatus("Live mode connected");
+      if (pendingCloudSaves === 0 && cloudReady) setCloudStatus("Live mode connected");
     });
 }
 
@@ -515,73 +497,6 @@ function activeApprentice() {
   return state.apprentices.find((apprentice) => apprentice.id === activeId) || null;
 }
 
-function isUuid(id) {
-  return /^[0-9a-f-]{36}$/i.test(id || "");
-}
-
-function cloneApprentice(apprentice) {
-  return JSON.parse(JSON.stringify(apprentice));
-}
-
-function updateUndoButton() {
-  if (!els.undoLastEdit) return;
-  els.undoLastEdit.classList.toggle("hidden", isApprenticeMode);
-  els.undoLastEdit.disabled = isApprenticeMode || !undoSnapshot;
-}
-
-function captureUndo(label = "last edit") {
-  if (isApprenticeMode) return;
-  const apprentice = activeApprentice();
-  if (!apprentice) return;
-  undoSnapshot = {
-    label,
-    apprenticeId: apprentice.id,
-    data: cloneApprentice(apprentice),
-  };
-  updateUndoButton();
-}
-
-function markCardDirty(card, actionName) {
-  const button = card?.querySelector(`[data-action='${actionName}']`);
-  button?.classList.remove("hidden");
-}
-
-async function restoreApprenticeSnapshot() {
-  if (!undoSnapshot) return;
-  const snapshot = undoSnapshot;
-  const index = state.apprentices.findIndex((apprentice) => apprentice.id === snapshot.apprenticeId);
-  if (index === -1) {
-    undoSnapshot = null;
-    updateUndoButton();
-    return;
-  }
-  state.apprentices[index] = cloneApprentice(snapshot.data);
-  activeId = snapshot.apprenticeId;
-  ensureApprenticeShape(state.apprentices[index]);
-  saveState();
-  render();
-  undoSnapshot = null;
-  updateUndoButton();
-
-  const restored = activeApprentice();
-  if (!cloudReady || !staffSession || !restored) {
-    setCloudStatus("Last edit undone");
-    return;
-  }
-  await saveApprenticeCloud(restored);
-  const taskKeys = Object.keys(restored.progress || {});
-  for (const taskKey of taskKeys) {
-    await saveTaskCloud(restored, taskKey);
-  }
-  for (const question of restored.questions || []) {
-    if (isUuid(question.id)) await saveQuestionCloud(restored, question);
-  }
-  for (const meeting of restored.oneOnOnes || []) {
-    if (isUuid(meeting.id)) await saveOneOnOneCloud(restored, meeting);
-  }
-  setCloudStatus("Last edit undone");
-}
-
 function ensureApprenticeShape(apprentice) {
   if (!apprentice) return;
   apprentice.questions ||= [];
@@ -691,11 +606,11 @@ async function loadStaffData() {
   try {
     const results = await withTimeout(
       Promise.all([
-        cloudClient.rpc("get_staff_apprentices"),
-        cloudClient.rpc("get_staff_task_progress"),
-        cloudClient.rpc("get_staff_questions"),
+        cloudClient.from("apprentices").select("*").order("name"),
+        cloudClient.from("task_progress").select("*"),
+        cloudClient.from("apprentice_questions").select("*").order("created_at", { ascending: false }),
         cloudClient.from("staff_notes").select("*").order("created_at", { ascending: false }),
-        cloudClient.rpc("get_staff_one_on_ones"),
+        cloudClient.from("one_on_ones").select("*").order("meeting_date", { ascending: false }).order("created_at", { ascending: false }),
         cloudClient.from("resources").select("*").order("sort_order").order("title"),
       ]),
       "Tracker data load timed out.",
@@ -709,8 +624,6 @@ async function loadStaffData() {
     noteRows = results[3].data;
     oneOnOneRows = results[4].data;
     resourceRows = results[5].data;
-    const loadError = results.find((result) => result.error)?.error;
-    if (loadError) throw new Error(loadError.message);
   } catch (error) {
     if (run !== staffLoadRun) return;
     cloudReady = false;
@@ -745,7 +658,7 @@ async function loadStaffData() {
   });
   activeId = activeId && byId.has(activeId) ? activeId : state.apprentices[0]?.id || null;
   state.apprentices.forEach(ensureApprenticeShape);
-  setCloudStatus(`Live mode connected: ${state.apprentices.length} apprentices, ${(progressRows || []).length} saved checkoffs`);
+  setCloudStatus("Live mode connected");
 }
 
 async function loadApprenticeLinkData() {
@@ -761,9 +674,10 @@ async function loadApprenticeLinkData() {
   try {
     const results = await withTimeout(
       Promise.all([
-        rpcWithApprenticeToken("get_apprentice_by_token"),
-        rpcWithApprenticeToken("get_progress_by_token"),
-        rpcWithApprenticeToken("get_questions_by_token"),
+        cloudClient.rpc("get_apprentice_by_token", { input_token: apprenticeToken }),
+        cloudClient.rpc("get_progress_by_token", { input_token: apprenticeToken }),
+        cloudClient.rpc("get_questions_by_token", { input_token: apprenticeToken }),
+        cloudClient.rpc("get_one_on_ones_by_token", { input_token: apprenticeToken }),
         cloudClient.from("resources").select("*").order("sort_order").order("title"),
       ]),
       "Apprentice link load timed out.",
@@ -773,20 +687,19 @@ async function loadApprenticeLinkData() {
     apprenticeError = results[0].error;
     progressRows = results[1].data;
     questionRows = results[2].data;
-    resourceRows = results[3].data;
+    oneOnOneRows = results[3].data;
+    resourceRows = results[4].data;
   } catch (error) {
     state.apprentices = [];
     activeId = null;
-    apprenticeLinkError = `Could not open apprentice link: ${error.message}`;
-    setCloudStatus(apprenticeLinkError);
+    setCloudStatus(`Could not open apprentice link: ${error.message}`);
     return;
   }
 
   if (apprenticeError || !apprenticeRows?.length) {
     state.apprentices = [];
     activeId = null;
-    apprenticeLinkError = apprenticeError ? `Could not open apprentice link: ${apprenticeError.message}` : "This apprentice link does not match a live apprentice record. Copy a fresh link from the staff view after the apprentice has saved.";
-    setCloudStatus(apprenticeLinkError);
+    setCloudStatus(apprenticeError ? `Could not open apprentice link: ${apprenticeError.message}` : "This apprentice link does not match a live apprentice.");
     return;
   }
 
@@ -795,13 +708,11 @@ async function loadApprenticeLinkData() {
     apprentice.progress[row.task_key] = dbProgressToApp(row);
   });
   apprentice.questions = (questionRows || []).map(dbQuestionToApp);
-  const oneOnOneResult = await rpcWithApprenticeToken("get_one_on_ones_by_token").catch((error) => ({ error }));
-  apprentice.oneOnOnes = oneOnOneResult?.error ? [] : (oneOnOneResult.data || []).map(dbOneOnOneToApp);
+  apprentice.oneOnOnes = (oneOnOneRows || []).map(dbOneOnOneToApp);
   state.apprentices = [apprentice];
   state.resources = (resourceRows || []).map(dbResourceToApp);
   activeId = apprentice.id;
   ensureApprenticeShape(apprentice);
-  apprenticeLinkError = "";
   setCloudStatus("Apprentice link connected");
 }
 
@@ -815,9 +726,9 @@ function render() {
   if (!apprentice && isApprenticeMode) {
     els.empty.querySelector("h2").textContent = cloudClient ? "This apprentice link could not be opened." : "This apprentice page needs the hosted version.";
     els.empty.querySelector("p:last-child").textContent =
-      apprenticeLinkError || (cloudClient
+      cloudClient
         ? "Ask staff to send a fresh private apprentice link."
-        : "This local demo stores data in one browser. To email private apprentice links, connect the app to shared online storage.");
+        : "This local demo stores data in one browser. To email private apprentice links, connect the app to shared online storage.";
   }
   els.empty.classList.toggle("hidden", Boolean(apprentice));
   els.profile.classList.toggle("hidden", !apprentice);
@@ -887,8 +798,7 @@ function renderLevelSummary(apprentice) {
 function renderLevels(apprentice) {
   els.levelsPanel.innerHTML = LEVELS.map((level) => {
     const percent = percentFor(apprentice, level.id);
-    if (!openLevelIds.size) openLevelIds.add(apprentice.currentLevel || "level-1");
-    const isOpen = openLevelIds.has(level.id);
+    const isOpen = level.id === (apprentice.currentLevel || "level-1");
     const rows = level.sections
       .map((section) => {
         const taskRows = section.tasks
@@ -992,10 +902,9 @@ function renderQuestions(apprentice) {
   }
   els.questionsList.innerHTML = apprentice.questions
     .map((question) => {
-      const isSavedQuestion = isUuid(question.id);
+      const isSavedQuestion = /^[0-9a-f-]{36}$/i.test(question.id);
       const apprenticeCanEdit = isApprenticeMode && !isSavedQuestion;
       const locked = isApprenticeMode && isSavedQuestion;
-      const saveHidden = locked || isSavedQuestion;
       return `
         <article class="question-card" data-question="${question.id}">
           <label>
@@ -1012,10 +921,7 @@ function renderQuestions(apprentice) {
               ${["Open", "Working on it", "Answered"].map((status) => `<option ${question.status === status ? "selected" : ""}>${status}</option>`).join("")}
             </select>
           </label>
-          <div class="entry-actions">
-            <button class="${saveHidden ? "hidden" : ""}" type="button" data-action="save-question">${isApprenticeMode ? "Submit" : "Save"}</button>
-            <button class="danger ${isApprenticeMode && !apprenticeCanEdit ? "hidden" : ""}" type="button" data-action="delete-question">Delete</button>
-          </div>
+          <button class="danger ${isApprenticeMode && !apprenticeCanEdit ? "hidden" : ""}" type="button" data-action="delete-question">Delete</button>
         </article>
       `;
     })
@@ -1050,10 +956,8 @@ function renderOneOnOnes(apprentice) {
     return;
   }
   els.oneOnOnesList.innerHTML = apprentice.oneOnOnes
-    .map((meeting) => {
-      const saveHidden = isUuid(meeting.id);
-      return `
-      <article class="note-card one-on-one-card" data-one-on-one="${meeting.id}">
+    .map((meeting) => `
+      <article class="note-card" data-one-on-one="${meeting.id}">
         <label>
           Date
           <input type="date" value="${escapeAttr(meeting.date)}" data-one-on-one-field="date" ${isApprenticeMode ? "disabled" : ""} />
@@ -1066,13 +970,9 @@ function renderOneOnOnes(apprentice) {
           Notes
           <textarea data-one-on-one-field="body" placeholder="Conversation notes, next steps, follow-up" ${isApprenticeMode ? "disabled" : ""}>${escapeHtml(meeting.body)}</textarea>
         </label>
-        <div class="entry-actions ${isApprenticeMode ? "hidden" : ""}">
-          <button class="${saveHidden ? "hidden" : ""}" type="button" data-action="save-one-on-one">Save</button>
-          <button class="danger" type="button" data-action="delete-one-on-one">Delete</button>
-        </div>
+        <button class="danger ${isApprenticeMode ? "hidden" : ""}" type="button" data-action="delete-one-on-one">Delete</button>
       </article>
-    `;
-    })
+    `)
     .join("");
 }
 
@@ -1103,7 +1003,6 @@ function updateTabVisibility() {
   els.addOneOnOne.classList.toggle("hidden", isApprenticeMode);
   filesUpload.classList.toggle("hidden", isApprenticeMode);
   els.deleteApprentice.classList.toggle("hidden", isApprenticeMode);
-  updateUndoButton();
   if (isApprenticeMode && !els.notesPanel.classList.contains("hidden")) {
     setActiveTab("levels");
   }
@@ -1118,35 +1017,18 @@ function updateApprentice(patch) {
   render();
 }
 
-function updateProgressDisplay(apprentice) {
-  els.overallPercent.textContent = `${percentFor(apprentice)}%`;
-  renderLevelSummary(apprentice);
-  renderApprenticeList();
-  LEVELS.forEach((level) => {
-    const card = els.levelsPanel.querySelector(`[data-level="${level.id}"]`);
-    if (!card) return;
-    const percent = percentFor(apprentice, level.id);
-    const percentText = card.querySelector(".overall span");
-    if (percentText) percentText.textContent = `${percent}%`;
-  });
-}
-
-async function updateTask(taskKey, field, value, sourceRow = null) {
+function updateTask(taskKey, field, value) {
   const apprentice = activeApprentice();
   if (!apprentice) return;
-  captureUndo("progress edit");
   apprentice.progress[taskKey] ||= {};
   apprentice.progress[taskKey][field] = value;
   if (field === "complete" && value && !apprentice.progress[taskKey].completedOn) {
     apprentice.progress[taskKey].completedOn = new Date().toISOString().slice(0, 10);
-    const dateInput = sourceRow?.querySelector("[data-field='completedOn']");
-    if (dateInput) dateInput.value = apprentice.progress[taskKey].completedOn;
   }
   apprentice.updatedAt = new Date().toISOString();
   saveState();
-  sourceRow?.classList.toggle("complete", Boolean(apprentice.progress[taskKey].complete));
-  updateProgressDisplay(apprentice);
-  await saveTaskCloud(apprentice, taskKey);
+  saveTaskCloud(apprentice, taskKey);
+  render();
 }
 
 function addFiles(files) {
@@ -1176,22 +1058,8 @@ async function saveApprenticeCloud(apprentice) {
 }
 
 async function saveTaskCloud(apprentice, taskKey) {
-  if (!cloudReady || !staffSession) {
-    setCloudStatus("Progress changed on this screen, but live saving is not connected.");
-    return;
-  }
-  await trackCloudSave(
-    cloudClient.rpc("save_task_progress", {
-      input_apprentice_id: apprentice.id,
-      input_task_key: taskKey,
-      input_complete: Boolean(apprentice.progress[taskKey].complete),
-      input_completed_on: apprentice.progress[taskKey].completedOn || null,
-      input_taught_by: apprentice.progress[taskKey].taughtBy || null,
-      input_method: apprentice.progress[taskKey].method || null,
-      input_notes: apprentice.progress[taskKey].notes || null,
-    }),
-    "Saving progress",
-  );
+  if (!cloudReady || !staffSession) return;
+  await trackCloudSave(cloudClient.from("task_progress").upsert(appProgressToDb(apprentice.id, taskKey, apprentice.progress[taskKey])), "Saving progress");
 }
 
 async function saveResourceCloud(resource) {
@@ -1214,30 +1082,27 @@ async function saveResourceCloud(resource) {
 
 async function saveQuestionCloud(apprentice, question) {
   if (!cloudReady) return;
-  if (isApprenticeMode && apprenticeToken && !isUuid(question.id)) {
-    const first = await trackCloudSave(
-      cloudClient.rpc("add_question_by_token", { input_token: apprenticeToken, question_body: question.body || "" }),
-      "Submitting question",
-    );
-    if (first.error) {
-      await trackCloudSave(cloudClient.rpc("add_question_by_token", { token: apprenticeToken, question_body: question.body || "" }), "Submitting question");
-    }
+  if (isApprenticeMode && apprenticeToken && !/^[0-9a-f-]{36}$/i.test(question.id)) {
+    await cloudClient.rpc("add_question_by_token", { input_token: apprenticeToken, question_body: question.body || "" });
     await loadApprenticeLinkData();
     renderQuestions(activeApprentice());
     return;
   }
   if (!staffSession) return;
-  const result = await trackCloudSave(
-    cloudClient.rpc("save_question_staff", {
-      input_question_id: isUuid(question.id) ? question.id : null,
-      input_apprentice_id: apprentice.id,
-      input_question_date: question.date || new Date().toISOString().slice(0, 10),
-      input_body: question.body || "",
-      input_status: question.status || "Open",
-    }),
-    "Saving question",
-  );
-  if (!result.error && result.data) question.id = result.data;
+  const payload = {
+    apprentice_id: apprentice.id,
+    question_date: question.date || new Date().toISOString().slice(0, 10),
+    body: question.body || "",
+    status: question.status || "Open",
+    updated_at: new Date().toISOString(),
+  };
+  if (/^[0-9a-f-]{36}$/i.test(question.id)) {
+    payload.id = question.id;
+    await cloudClient.from("apprentice_questions").upsert(payload);
+  } else {
+    const { data } = await cloudClient.from("apprentice_questions").insert(payload).select("*").single();
+    if (data) Object.assign(question, dbQuestionToApp(data));
+  }
 }
 
 async function saveNoteCloud(apprentice, note) {
@@ -1248,7 +1113,7 @@ async function saveNoteCloud(apprentice, note) {
     body: note.body || "",
     updated_at: new Date().toISOString(),
   };
-  if (isUuid(note.id)) {
+  if (/^[0-9a-f-]{36}$/i.test(note.id)) {
     payload.id = note.id;
     await cloudClient.from("staff_notes").upsert(payload);
   } else {
@@ -1258,20 +1123,21 @@ async function saveNoteCloud(apprentice, note) {
 }
 
 async function saveOneOnOneCloud(apprentice, meeting) {
-  if (!cloudReady || !staffSession) {
-    setCloudStatus("One-on-one changed on this screen, but live saving is not connected.");
-    return { message: "Live saving is not connected" };
-  }
+  if (!cloudReady || !staffSession) return;
   const payload = {
-    input_apprentice_id: apprentice.id,
-    input_meeting_id: isUuid(meeting.id) ? meeting.id : null,
-    input_meeting_date: meeting.date || new Date().toISOString().slice(0, 10),
-    input_subject: meeting.subject || "",
-    input_body: meeting.body || "",
+    apprentice_id: apprentice.id,
+    meeting_date: meeting.date || new Date().toISOString().slice(0, 10),
+    subject: meeting.subject || "",
+    body: meeting.body || "",
+    updated_at: new Date().toISOString(),
   };
-  const { data, error } = await trackCloudSave(cloudClient.rpc("save_one_on_one_staff", payload), "Saving one-on-one");
-  const savedRow = Array.isArray(data) ? data[0] : data;
-  if (savedRow) Object.assign(meeting, dbOneOnOneToApp(savedRow));
+  if (/^[0-9a-f-]{36}$/i.test(meeting.id)) {
+    payload.id = meeting.id;
+    const { error } = await trackCloudSave(cloudClient.from("one_on_ones").upsert(payload), "Saving one-on-one");
+    return error;
+  }
+  const { data, error } = await trackCloudSave(cloudClient.from("one_on_ones").insert(payload).select("*").single(), "Saving one-on-one");
+  if (data) Object.assign(meeting, dbOneOnOneToApp(data));
   return error;
 }
 
@@ -1308,14 +1174,16 @@ els.addForm.addEventListener("submit", async (event) => {
   if (cloudReady && staffSession) {
     setCloudStatus("Adding apprentice...");
     const initialProgress = apprentice.progress;
-    const { data, error } = await trackCloudSave(cloudClient.rpc("create_apprentice_staff", { input_name: apprentice.name }), "Adding apprentice");
+    const { data, error } = await cloudClient.from("apprentices").insert(appApprenticeToDb(apprentice)).select("*").single();
     if (error) {
       setCloudStatus(`Could not add apprentice: ${error.message}`);
       return;
     }
-    const savedRow = Array.isArray(data) ? data[0] : data;
-    Object.assign(apprentice, dbApprenticeToApp(savedRow));
+    Object.assign(apprentice, dbApprenticeToApp(data));
     apprentice.progress = initialProgress;
+    const progressRows = Object.entries(initialProgress).map(([taskKey, item]) => appProgressToDb(apprentice.id, taskKey, item));
+    const { error: progressError } = await cloudClient.from("task_progress").upsert(progressRows);
+    if (progressError) setCloudStatus(`Apprentice added, but progress setup failed: ${progressError.message}`);
   }
   state.apprentices.push(apprentice);
   activeId = apprentice.id;
@@ -1335,41 +1203,18 @@ els.apprenticeList.addEventListener("click", (event) => {
 });
 
 els.search.addEventListener("input", renderApprenticeList);
-els.activeName.addEventListener("change", () => {
-  captureUndo("name edit");
-  updateApprentice({ name: els.activeName.value.trim() || "Untitled apprentice" });
-});
-els.startDate.addEventListener("change", () => {
-  captureUndo("start date edit");
-  updateApprentice({ startDate: els.startDate.value });
-});
-els.currentLevel.addEventListener("change", () => {
-  captureUndo("level edit");
-  updateApprentice({ currentLevel: els.currentLevel.value });
-});
-els.mentorName.addEventListener("change", () => {
-  captureUndo("mentor edit");
-  updateApprentice({ mentor: els.mentorName.value.trim() });
-});
+els.activeName.addEventListener("change", () => updateApprentice({ name: els.activeName.value.trim() || "Untitled apprentice" }));
+els.startDate.addEventListener("change", () => updateApprentice({ startDate: els.startDate.value }));
+els.currentLevel.addEventListener("change", () => updateApprentice({ currentLevel: els.currentLevel.value }));
+els.mentorName.addEventListener("change", () => updateApprentice({ mentor: els.mentorName.value.trim() }));
 
 els.levelsPanel.addEventListener("change", (event) => {
   if (isApprenticeMode) return;
   const row = event.target.closest("[data-task]");
   if (!row || !event.target.dataset.field) return;
   const value = event.target.type === "checkbox" ? event.target.checked : event.target.value;
-  updateTask(row.dataset.task, event.target.dataset.field, value, row);
+  updateTask(row.dataset.task, event.target.dataset.field, value);
 });
-
-els.levelsPanel.addEventListener(
-  "toggle",
-  (event) => {
-    const level = event.target.closest?.("details.level-card");
-    if (!level) return;
-    if (level.open) openLevelIds.add(level.dataset.level);
-    else openLevelIds.delete(level.dataset.level);
-  },
-  true,
-);
 
 els.levelsPanel.addEventListener("input", (event) => {
   if (isApprenticeMode) return;
@@ -1447,56 +1292,38 @@ els.addQuestion.addEventListener("click", async () => {
     body: "",
     status: "Open",
   };
+  if (!isApprenticeMode) await saveQuestionCloud(apprentice, question);
   apprentice.questions.unshift(question);
   saveState();
   renderQuestions(apprentice);
 });
 
-els.questionsList.addEventListener("input", (event) => {
+els.questionsList.addEventListener("input", async (event) => {
   const card = event.target.closest("[data-question]");
   if (!card || !event.target.dataset.questionField) return;
   const apprentice = activeApprentice();
   const question = apprentice.questions.find((item) => item.id === card.dataset.question);
-  if (!question) return;
-  if (!event.target.dataset.undoCaptured) {
-    captureUndo("question edit");
-    event.target.dataset.undoCaptured = "true";
-  }
   question[event.target.dataset.questionField] = event.target.value;
   saveState();
-  markCardDirty(card, "save-question");
+  await saveQuestionCloud(apprentice, question);
 });
 
-els.questionsList.addEventListener("change", (event) => {
+els.questionsList.addEventListener("change", async (event) => {
   const card = event.target.closest("[data-question]");
   if (!card || !event.target.dataset.questionField) return;
   const apprentice = activeApprentice();
   const question = apprentice.questions.find((item) => item.id === card.dataset.question);
-  if (!question) return;
-  if (!event.target.dataset.undoCaptured) {
-    captureUndo("question edit");
-    event.target.dataset.undoCaptured = "true";
-  }
   question[event.target.dataset.questionField] = event.target.value;
   saveState();
-  markCardDirty(card, "save-question");
+  await saveQuestionCloud(apprentice, question);
 });
 
 els.questionsList.addEventListener("click", async (event) => {
-  const action = event.target.dataset.action;
-  if (!["save-question", "delete-question"].includes(action)) return;
+  if (!event.target.matches("[data-action='delete-question']")) return;
   const apprentice = activeApprentice();
-  if (!apprentice) return;
   const id = event.target.closest("[data-question]").dataset.question;
-  const question = apprentice.questions.find((item) => item.id === id);
-  if (action === "save-question" && question) {
-    await saveQuestionCloud(apprentice, question);
-    renderQuestions(apprentice);
-    return;
-  }
-  captureUndo("question delete");
-  if (cloudReady && staffSession && isUuid(id)) {
-    await trackCloudSave(cloudClient.rpc("delete_question_staff", { input_question_id: id }), "Deleting question");
+  if (cloudReady && staffSession && /^[0-9a-f-]{36}$/i.test(id)) {
+    await cloudClient.from("apprentice_questions").delete().eq("id", id);
   }
   apprentice.questions = apprentice.questions.filter((question) => question.id !== id);
   saveState();
@@ -1549,43 +1376,31 @@ els.addOneOnOne.addEventListener("click", async () => {
     subject: "",
     body: "",
   };
+  const error = await saveOneOnOneCloud(apprentice, meeting);
+  if (error) return;
   apprentice.oneOnOnes.unshift(meeting);
   saveState();
   renderOneOnOnes(apprentice);
 });
 
-els.oneOnOnesList.addEventListener("input", (event) => {
+els.oneOnOnesList.addEventListener("input", async (event) => {
   if (isApprenticeMode) return;
   const card = event.target.closest("[data-one-on-one]");
   if (!card || !event.target.dataset.oneOnOneField) return;
   const apprentice = activeApprentice();
   const meeting = apprentice.oneOnOnes.find((item) => item.id === card.dataset.oneOnOne);
-  if (!meeting) return;
-  if (!event.target.dataset.undoCaptured) {
-    captureUndo("one-on-one edit");
-    event.target.dataset.undoCaptured = "true";
-  }
   meeting[event.target.dataset.oneOnOneField] = event.target.value;
   saveState();
-  markCardDirty(card, "save-one-on-one");
+  await saveOneOnOneCloud(apprentice, meeting);
 });
 
 els.oneOnOnesList.addEventListener("click", async (event) => {
   if (isApprenticeMode) return;
-  const action = event.target.dataset.action;
-  if (!["save-one-on-one", "delete-one-on-one"].includes(action)) return;
+  if (!event.target.matches("[data-action='delete-one-on-one']")) return;
   const apprentice = activeApprentice();
-  if (!apprentice) return;
   const id = event.target.closest("[data-one-on-one]").dataset.oneOnOne;
-  const meeting = apprentice.oneOnOnes.find((item) => item.id === id);
-  if (action === "save-one-on-one" && meeting) {
-    const error = await saveOneOnOneCloud(apprentice, meeting);
-    if (!error) renderOneOnOnes(apprentice);
-    return;
-  }
-  captureUndo("one-on-one delete");
-  if (cloudReady && staffSession && isUuid(id)) {
-    await trackCloudSave(cloudClient.rpc("delete_one_on_one_staff", { input_meeting_id: id }), "Deleting one-on-one");
+  if (cloudReady && staffSession && /^[0-9a-f-]{36}$/i.test(id)) {
+    await trackCloudSave(cloudClient.from("one_on_ones").delete().eq("id", id), "Deleting one-on-one");
   }
   apprentice.oneOnOnes = apprentice.oneOnOnes.filter((meeting) => meeting.id !== id);
   saveState();
@@ -1608,9 +1423,7 @@ els.filesList.addEventListener("click", (event) => {
   renderFiles(apprentice);
 });
 
-els.undoLastEdit?.addEventListener("click", restoreApprenticeSnapshot);
-
-els.exportData?.addEventListener("click", () => {
+els.exportData.addEventListener("click", () => {
   const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -1620,7 +1433,7 @@ els.exportData?.addEventListener("click", () => {
   URL.revokeObjectURL(url);
 });
 
-els.importData?.addEventListener("change", (event) => {
+els.importData.addEventListener("change", (event) => {
   const file = event.target.files[0];
   if (!file) return;
   const reader = new FileReader();
@@ -1665,8 +1478,7 @@ els.themeToggle.addEventListener("click", () => {
 els.copyApprenticeLink.addEventListener("click", async () => {
   const apprentice = activeApprentice();
   if (!apprentice) return;
-  const fallbackBase = cloudConfig.appBaseUrl || "https://harrison-ananda.github.io/ananda-apprentice-tracker/";
-  const url = new URL(window.location.protocol === "file:" ? fallbackBase : window.location.href);
+  const url = new URL(window.location.href);
   url.searchParams.set("view", "apprentice");
   url.searchParams.delete("apprentice");
   if (apprentice.shareToken) {

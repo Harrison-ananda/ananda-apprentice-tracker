@@ -198,7 +198,6 @@ const apprenticeToken = route.get("token");
 const cloudConfig = window.ANANDA_APP_CONFIG || {
   supabaseUrl: "https://plxvpthbyyobrfxvhylu.supabase.co",
   supabaseAnonKey: "sb_publishable_8gbbGBF-2h2IeYf97Dak2w_By08DLVE",
-  appBaseUrl: "https://harrison-ananda.github.io/ananda-apprentice-tracker/",
 };
 let cloudClient = null;
 let authListenerReady = false;
@@ -209,7 +208,6 @@ let staffSession = null;
 let activeId = route.get("apprentice") || state.activeId || state.apprentices[0]?.id || null;
 let openLevelIds = new Set();
 let apprenticeLinkError = "";
-let undoSnapshot = null;
 
 const els = {
   apprenticeList: document.querySelector("#apprenticeList"),
@@ -256,7 +254,6 @@ const els = {
   profileFileUpload: document.querySelector("#profileFileUpload"),
   exportData: document.querySelector("#exportData"),
   importData: document.querySelector("#importData"),
-  undoLastEdit: document.querySelector("#undoLastEdit"),
   printProfile: document.querySelector("#printProfile"),
   deleteApprentice: document.querySelector("#deleteApprentice"),
   themeToggle: document.querySelector("#themeToggle"),
@@ -515,73 +512,6 @@ function activeApprentice() {
   return state.apprentices.find((apprentice) => apprentice.id === activeId) || null;
 }
 
-function isUuid(id) {
-  return /^[0-9a-f-]{36}$/i.test(id || "");
-}
-
-function cloneApprentice(apprentice) {
-  return JSON.parse(JSON.stringify(apprentice));
-}
-
-function updateUndoButton() {
-  if (!els.undoLastEdit) return;
-  els.undoLastEdit.classList.toggle("hidden", isApprenticeMode);
-  els.undoLastEdit.disabled = isApprenticeMode || !undoSnapshot;
-}
-
-function captureUndo(label = "last edit") {
-  if (isApprenticeMode) return;
-  const apprentice = activeApprentice();
-  if (!apprentice) return;
-  undoSnapshot = {
-    label,
-    apprenticeId: apprentice.id,
-    data: cloneApprentice(apprentice),
-  };
-  updateUndoButton();
-}
-
-function markCardDirty(card, actionName) {
-  const button = card?.querySelector(`[data-action='${actionName}']`);
-  button?.classList.remove("hidden");
-}
-
-async function restoreApprenticeSnapshot() {
-  if (!undoSnapshot) return;
-  const snapshot = undoSnapshot;
-  const index = state.apprentices.findIndex((apprentice) => apprentice.id === snapshot.apprenticeId);
-  if (index === -1) {
-    undoSnapshot = null;
-    updateUndoButton();
-    return;
-  }
-  state.apprentices[index] = cloneApprentice(snapshot.data);
-  activeId = snapshot.apprenticeId;
-  ensureApprenticeShape(state.apprentices[index]);
-  saveState();
-  render();
-  undoSnapshot = null;
-  updateUndoButton();
-
-  const restored = activeApprentice();
-  if (!cloudReady || !staffSession || !restored) {
-    setCloudStatus("Last edit undone");
-    return;
-  }
-  await saveApprenticeCloud(restored);
-  const taskKeys = Object.keys(restored.progress || {});
-  for (const taskKey of taskKeys) {
-    await saveTaskCloud(restored, taskKey);
-  }
-  for (const question of restored.questions || []) {
-    if (isUuid(question.id)) await saveQuestionCloud(restored, question);
-  }
-  for (const meeting of restored.oneOnOnes || []) {
-    if (isUuid(meeting.id)) await saveOneOnOneCloud(restored, meeting);
-  }
-  setCloudStatus("Last edit undone");
-}
-
 function ensureApprenticeShape(apprentice) {
   if (!apprentice) return;
   apprentice.questions ||= [];
@@ -693,7 +623,7 @@ async function loadStaffData() {
       Promise.all([
         cloudClient.rpc("get_staff_apprentices"),
         cloudClient.rpc("get_staff_task_progress"),
-        cloudClient.rpc("get_staff_questions"),
+        cloudClient.from("apprentice_questions").select("*").order("created_at", { ascending: false }),
         cloudClient.from("staff_notes").select("*").order("created_at", { ascending: false }),
         cloudClient.rpc("get_staff_one_on_ones"),
         cloudClient.from("resources").select("*").order("sort_order").order("title"),
@@ -992,10 +922,9 @@ function renderQuestions(apprentice) {
   }
   els.questionsList.innerHTML = apprentice.questions
     .map((question) => {
-      const isSavedQuestion = isUuid(question.id);
+      const isSavedQuestion = /^[0-9a-f-]{36}$/i.test(question.id);
       const apprenticeCanEdit = isApprenticeMode && !isSavedQuestion;
       const locked = isApprenticeMode && isSavedQuestion;
-      const saveHidden = locked || isSavedQuestion;
       return `
         <article class="question-card" data-question="${question.id}">
           <label>
@@ -1012,10 +941,7 @@ function renderQuestions(apprentice) {
               ${["Open", "Working on it", "Answered"].map((status) => `<option ${question.status === status ? "selected" : ""}>${status}</option>`).join("")}
             </select>
           </label>
-          <div class="entry-actions">
-            <button class="${saveHidden ? "hidden" : ""}" type="button" data-action="save-question">${isApprenticeMode ? "Submit" : "Save"}</button>
-            <button class="danger ${isApprenticeMode && !apprenticeCanEdit ? "hidden" : ""}" type="button" data-action="delete-question">Delete</button>
-          </div>
+          <button class="danger ${isApprenticeMode && !apprenticeCanEdit ? "hidden" : ""}" type="button" data-action="delete-question">Delete</button>
         </article>
       `;
     })
@@ -1050,9 +976,7 @@ function renderOneOnOnes(apprentice) {
     return;
   }
   els.oneOnOnesList.innerHTML = apprentice.oneOnOnes
-    .map((meeting) => {
-      const saveHidden = isUuid(meeting.id);
-      return `
+    .map((meeting) => `
       <article class="note-card one-on-one-card" data-one-on-one="${meeting.id}">
         <label>
           Date
@@ -1066,13 +990,9 @@ function renderOneOnOnes(apprentice) {
           Notes
           <textarea data-one-on-one-field="body" placeholder="Conversation notes, next steps, follow-up" ${isApprenticeMode ? "disabled" : ""}>${escapeHtml(meeting.body)}</textarea>
         </label>
-        <div class="entry-actions ${isApprenticeMode ? "hidden" : ""}">
-          <button class="${saveHidden ? "hidden" : ""}" type="button" data-action="save-one-on-one">Save</button>
-          <button class="danger" type="button" data-action="delete-one-on-one">Delete</button>
-        </div>
+        <button class="danger ${isApprenticeMode ? "hidden" : ""}" type="button" data-action="delete-one-on-one">Delete</button>
       </article>
-    `;
-    })
+    `)
     .join("");
 }
 
@@ -1103,7 +1023,6 @@ function updateTabVisibility() {
   els.addOneOnOne.classList.toggle("hidden", isApprenticeMode);
   filesUpload.classList.toggle("hidden", isApprenticeMode);
   els.deleteApprentice.classList.toggle("hidden", isApprenticeMode);
-  updateUndoButton();
   if (isApprenticeMode && !els.notesPanel.classList.contains("hidden")) {
     setActiveTab("levels");
   }
@@ -1134,7 +1053,6 @@ function updateProgressDisplay(apprentice) {
 async function updateTask(taskKey, field, value, sourceRow = null) {
   const apprentice = activeApprentice();
   if (!apprentice) return;
-  captureUndo("progress edit");
   apprentice.progress[taskKey] ||= {};
   apprentice.progress[taskKey][field] = value;
   if (field === "complete" && value && !apprentice.progress[taskKey].completedOn) {
@@ -1214,30 +1132,28 @@ async function saveResourceCloud(resource) {
 
 async function saveQuestionCloud(apprentice, question) {
   if (!cloudReady) return;
-  if (isApprenticeMode && apprenticeToken && !isUuid(question.id)) {
-    const first = await trackCloudSave(
-      cloudClient.rpc("add_question_by_token", { input_token: apprenticeToken, question_body: question.body || "" }),
-      "Submitting question",
-    );
-    if (first.error) {
-      await trackCloudSave(cloudClient.rpc("add_question_by_token", { token: apprenticeToken, question_body: question.body || "" }), "Submitting question");
-    }
+  if (isApprenticeMode && apprenticeToken && !/^[0-9a-f-]{36}$/i.test(question.id)) {
+    const first = await cloudClient.rpc("add_question_by_token", { input_token: apprenticeToken, question_body: question.body || "" });
+    if (first.error) await cloudClient.rpc("add_question_by_token", { token: apprenticeToken, question_body: question.body || "" });
     await loadApprenticeLinkData();
     renderQuestions(activeApprentice());
     return;
   }
   if (!staffSession) return;
-  const result = await trackCloudSave(
-    cloudClient.rpc("save_question_staff", {
-      input_question_id: isUuid(question.id) ? question.id : null,
-      input_apprentice_id: apprentice.id,
-      input_question_date: question.date || new Date().toISOString().slice(0, 10),
-      input_body: question.body || "",
-      input_status: question.status || "Open",
-    }),
-    "Saving question",
-  );
-  if (!result.error && result.data) question.id = result.data;
+  const payload = {
+    apprentice_id: apprentice.id,
+    question_date: question.date || new Date().toISOString().slice(0, 10),
+    body: question.body || "",
+    status: question.status || "Open",
+    updated_at: new Date().toISOString(),
+  };
+  if (/^[0-9a-f-]{36}$/i.test(question.id)) {
+    payload.id = question.id;
+    await cloudClient.from("apprentice_questions").upsert(payload);
+  } else {
+    const { data } = await cloudClient.from("apprentice_questions").insert(payload).select("*").single();
+    if (data) Object.assign(question, dbQuestionToApp(data));
+  }
 }
 
 async function saveNoteCloud(apprentice, note) {
@@ -1248,7 +1164,7 @@ async function saveNoteCloud(apprentice, note) {
     body: note.body || "",
     updated_at: new Date().toISOString(),
   };
-  if (isUuid(note.id)) {
+  if (/^[0-9a-f-]{36}$/i.test(note.id)) {
     payload.id = note.id;
     await cloudClient.from("staff_notes").upsert(payload);
   } else {
@@ -1264,7 +1180,7 @@ async function saveOneOnOneCloud(apprentice, meeting) {
   }
   const payload = {
     input_apprentice_id: apprentice.id,
-    input_meeting_id: isUuid(meeting.id) ? meeting.id : null,
+    input_meeting_id: /^[0-9a-f-]{36}$/i.test(meeting.id) ? meeting.id : null,
     input_meeting_date: meeting.date || new Date().toISOString().slice(0, 10),
     input_subject: meeting.subject || "",
     input_body: meeting.body || "",
@@ -1335,22 +1251,10 @@ els.apprenticeList.addEventListener("click", (event) => {
 });
 
 els.search.addEventListener("input", renderApprenticeList);
-els.activeName.addEventListener("change", () => {
-  captureUndo("name edit");
-  updateApprentice({ name: els.activeName.value.trim() || "Untitled apprentice" });
-});
-els.startDate.addEventListener("change", () => {
-  captureUndo("start date edit");
-  updateApprentice({ startDate: els.startDate.value });
-});
-els.currentLevel.addEventListener("change", () => {
-  captureUndo("level edit");
-  updateApprentice({ currentLevel: els.currentLevel.value });
-});
-els.mentorName.addEventListener("change", () => {
-  captureUndo("mentor edit");
-  updateApprentice({ mentor: els.mentorName.value.trim() });
-});
+els.activeName.addEventListener("change", () => updateApprentice({ name: els.activeName.value.trim() || "Untitled apprentice" }));
+els.startDate.addEventListener("change", () => updateApprentice({ startDate: els.startDate.value }));
+els.currentLevel.addEventListener("change", () => updateApprentice({ currentLevel: els.currentLevel.value }));
+els.mentorName.addEventListener("change", () => updateApprentice({ mentor: els.mentorName.value.trim() }));
 
 els.levelsPanel.addEventListener("change", (event) => {
   if (isApprenticeMode) return;
@@ -1447,56 +1351,38 @@ els.addQuestion.addEventListener("click", async () => {
     body: "",
     status: "Open",
   };
+  if (!isApprenticeMode) await saveQuestionCloud(apprentice, question);
   apprentice.questions.unshift(question);
   saveState();
   renderQuestions(apprentice);
 });
 
-els.questionsList.addEventListener("input", (event) => {
+els.questionsList.addEventListener("input", async (event) => {
   const card = event.target.closest("[data-question]");
   if (!card || !event.target.dataset.questionField) return;
   const apprentice = activeApprentice();
   const question = apprentice.questions.find((item) => item.id === card.dataset.question);
-  if (!question) return;
-  if (!event.target.dataset.undoCaptured) {
-    captureUndo("question edit");
-    event.target.dataset.undoCaptured = "true";
-  }
   question[event.target.dataset.questionField] = event.target.value;
   saveState();
-  markCardDirty(card, "save-question");
+  await saveQuestionCloud(apprentice, question);
 });
 
-els.questionsList.addEventListener("change", (event) => {
+els.questionsList.addEventListener("change", async (event) => {
   const card = event.target.closest("[data-question]");
   if (!card || !event.target.dataset.questionField) return;
   const apprentice = activeApprentice();
   const question = apprentice.questions.find((item) => item.id === card.dataset.question);
-  if (!question) return;
-  if (!event.target.dataset.undoCaptured) {
-    captureUndo("question edit");
-    event.target.dataset.undoCaptured = "true";
-  }
   question[event.target.dataset.questionField] = event.target.value;
   saveState();
-  markCardDirty(card, "save-question");
+  await saveQuestionCloud(apprentice, question);
 });
 
 els.questionsList.addEventListener("click", async (event) => {
-  const action = event.target.dataset.action;
-  if (!["save-question", "delete-question"].includes(action)) return;
+  if (!event.target.matches("[data-action='delete-question']")) return;
   const apprentice = activeApprentice();
-  if (!apprentice) return;
   const id = event.target.closest("[data-question]").dataset.question;
-  const question = apprentice.questions.find((item) => item.id === id);
-  if (action === "save-question" && question) {
-    await saveQuestionCloud(apprentice, question);
-    renderQuestions(apprentice);
-    return;
-  }
-  captureUndo("question delete");
-  if (cloudReady && staffSession && isUuid(id)) {
-    await trackCloudSave(cloudClient.rpc("delete_question_staff", { input_question_id: id }), "Deleting question");
+  if (cloudReady && staffSession && /^[0-9a-f-]{36}$/i.test(id)) {
+    await cloudClient.from("apprentice_questions").delete().eq("id", id);
   }
   apprentice.questions = apprentice.questions.filter((question) => question.id !== id);
   saveState();
@@ -1552,39 +1438,27 @@ els.addOneOnOne.addEventListener("click", async () => {
   apprentice.oneOnOnes.unshift(meeting);
   saveState();
   renderOneOnOnes(apprentice);
+  const error = await saveOneOnOneCloud(apprentice, meeting);
+  if (!error) renderOneOnOnes(apprentice);
 });
 
-els.oneOnOnesList.addEventListener("input", (event) => {
+els.oneOnOnesList.addEventListener("input", async (event) => {
   if (isApprenticeMode) return;
   const card = event.target.closest("[data-one-on-one]");
   if (!card || !event.target.dataset.oneOnOneField) return;
   const apprentice = activeApprentice();
   const meeting = apprentice.oneOnOnes.find((item) => item.id === card.dataset.oneOnOne);
-  if (!meeting) return;
-  if (!event.target.dataset.undoCaptured) {
-    captureUndo("one-on-one edit");
-    event.target.dataset.undoCaptured = "true";
-  }
   meeting[event.target.dataset.oneOnOneField] = event.target.value;
   saveState();
-  markCardDirty(card, "save-one-on-one");
+  await saveOneOnOneCloud(apprentice, meeting);
 });
 
 els.oneOnOnesList.addEventListener("click", async (event) => {
   if (isApprenticeMode) return;
-  const action = event.target.dataset.action;
-  if (!["save-one-on-one", "delete-one-on-one"].includes(action)) return;
+  if (!event.target.matches("[data-action='delete-one-on-one']")) return;
   const apprentice = activeApprentice();
-  if (!apprentice) return;
   const id = event.target.closest("[data-one-on-one]").dataset.oneOnOne;
-  const meeting = apprentice.oneOnOnes.find((item) => item.id === id);
-  if (action === "save-one-on-one" && meeting) {
-    const error = await saveOneOnOneCloud(apprentice, meeting);
-    if (!error) renderOneOnOnes(apprentice);
-    return;
-  }
-  captureUndo("one-on-one delete");
-  if (cloudReady && staffSession && isUuid(id)) {
+  if (cloudReady && staffSession && /^[0-9a-f-]{36}$/i.test(id)) {
     await trackCloudSave(cloudClient.rpc("delete_one_on_one_staff", { input_meeting_id: id }), "Deleting one-on-one");
   }
   apprentice.oneOnOnes = apprentice.oneOnOnes.filter((meeting) => meeting.id !== id);
@@ -1607,8 +1481,6 @@ els.filesList.addEventListener("click", (event) => {
   saveState();
   renderFiles(apprentice);
 });
-
-els.undoLastEdit?.addEventListener("click", restoreApprenticeSnapshot);
 
 els.exportData?.addEventListener("click", () => {
   const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
@@ -1665,8 +1537,7 @@ els.themeToggle.addEventListener("click", () => {
 els.copyApprenticeLink.addEventListener("click", async () => {
   const apprentice = activeApprentice();
   if (!apprentice) return;
-  const fallbackBase = cloudConfig.appBaseUrl || "https://harrison-ananda.github.io/ananda-apprentice-tracker/";
-  const url = new URL(window.location.protocol === "file:" ? fallbackBase : window.location.href);
+  const url = new URL(window.location.protocol === "file:" ? "https://jolly-puppy-6e68f4.netlify.app/" : window.location.href);
   url.searchParams.set("view", "apprentice");
   url.searchParams.delete("apprentice");
   if (apprentice.shareToken) {

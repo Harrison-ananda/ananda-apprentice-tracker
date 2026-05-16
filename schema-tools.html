@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ananda schema copy tools</title>
+    <link rel="stylesheet" href="styles-20260515-1712.css" />
+    <style>
+      body {
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+      }
+
+      .schema-card {
+        width: min(100%, 680px);
+        display: grid;
+        gap: 16px;
+        padding: 28px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+
+      .schema-card h1 {
+        margin: 0;
+        font-size: clamp(2rem, 7vw, 3.8rem);
+        line-height: 1;
+        letter-spacing: 0;
+        text-transform: lowercase;
+      }
+
+      .button-row {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .primary {
+        background: var(--ink);
+        border-color: var(--ink);
+        color: var(--surface);
+      }
+
+      pre {
+        max-height: 260px;
+        overflow: auto;
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--bg);
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      @media (max-width: 620px) {
+        .button-row {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="schema-card">
+      <img class="login-logo" src="assets/ananda-logo-black.svg" alt="ananda hair studio" />
+      <p class="eyebrow">Supabase setup</p>
+      <h1>copy schema sql</h1>
+      <p class="muted">Use the quick fix first. Paste it into a new Supabase SQL Editor tab and run it.</p>
+      <div class="button-row">
+        <button class="primary" id="copyQuick" type="button">Copy quick fix SQL</button>
+        <button id="copyFull" type="button">Copy full schema SQL</button>
+      </div>
+      <p class="muted" id="status">Ready.</p>
+      <pre id="preview">Click a button to load the SQL here.</pre>
+    </main>
+
+    <script>
+      async function copySql(path, label) {
+        const status = document.querySelector("#status");
+        const preview = document.querySelector("#preview");
+        try {
+          status.textContent = `Loading ${label}...`;
+          const response = await fetch(path, { cache: "no-store" });
+          if (!response.ok) throw new Error(`Could not load ${path}`);
+          const text = await response.text();
+          await navigator.clipboard.writeText(text);
+          preview.textContent = text;
+          status.textContent = `${label} copied. Paste it into Supabase SQL Editor and run it.`;
+        } catch (error) {
+          status.textContent = `${label} could not be copied automatically. Open ${path}, select all, and copy it.`;
+          preview.textContent = error.message;
+        }
+      }
+
+      document.querySelector("#copyQuick").addEventListener("click", () => copySql("supabase-function-refresh.sql", "Quick fix SQL"));
+      document.querySelector("#copyFull").addEventListener("click", () => copySql("supabase-schema.sql", "Full schema SQL"));
+    </script>
+  </body>
+</html>

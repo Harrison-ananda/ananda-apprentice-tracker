@@ -66,11 +66,6 @@ button:hover,
   border-color: var(--accent);
 }
 
-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
-}
-
 input,
 select,
 textarea {
@@ -778,11 +773,6 @@ body.auth-required .app-shell {
   grid-template-columns: 170px 1fr 150px auto;
   gap: 10px;
   align-items: start;
-}
-
-.entry-actions {
-  display: grid;
-  gap: 8px;
 }
 
 .file-card {
