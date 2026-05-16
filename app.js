@@ -469,6 +469,17 @@ function dbOneOnOneToApp(row) {
   };
 }
 
+function dbFileToApp(row) {
+  return {
+    id: row.id,
+    name: row.file_name || "",
+    type: row.file_type || "file",
+    size: row.file_size || 0,
+    dataUrl: row.data_url || "",
+    addedAt: row.created_at || new Date().toISOString(),
+  };
+}
+
 function dbResourceToApp(row) {
   return {
     id: row.id,
@@ -605,6 +616,12 @@ function percentFor(apprentice, levelId = null) {
   return ids.length ? Math.round((complete / ids.length) * 100) : 0;
 }
 
+function progressTone(percent) {
+  if (percent >= 50) return "progress-green";
+  if (percent >= 25) return "progress-blue";
+  return "progress-orange";
+}
+
 function allTaskIds(levelId = null) {
   return LEVELS.filter((level) => !levelId || level.id === levelId).flatMap((level) =>
     level.sections.flatMap((section) => section.tasks.map((task) => taskId(level.id, section.name, task))),
@@ -687,6 +704,7 @@ async function loadStaffData() {
   let questionRows;
   let noteRows;
   let oneOnOneRows;
+  let fileRows;
   let resourceRows;
   try {
     const results = await withTimeout(
@@ -696,6 +714,7 @@ async function loadStaffData() {
         cloudClient.rpc("get_staff_questions"),
         cloudClient.from("staff_notes").select("*").order("created_at", { ascending: false }),
         cloudClient.rpc("get_staff_one_on_ones"),
+        cloudClient.rpc("get_staff_files"),
         cloudClient.from("resources").select("*").order("sort_order").order("title"),
       ]),
       "Tracker data load timed out.",
@@ -708,7 +727,8 @@ async function loadStaffData() {
     questionRows = results[2].data;
     noteRows = results[3].data;
     oneOnOneRows = results[4].data;
-    resourceRows = results[5].data;
+    fileRows = results[5].data;
+    resourceRows = results[6].data;
     const loadError = results.find((result) => result.error)?.error;
     if (loadError) throw new Error(loadError.message);
   } catch (error) {
@@ -743,6 +763,10 @@ async function loadStaffData() {
     const apprentice = byId.get(row.apprentice_id);
     if (apprentice) apprentice.oneOnOnes.push(dbOneOnOneToApp(row));
   });
+  (fileRows || []).forEach((row) => {
+    const apprentice = byId.get(row.apprentice_id);
+    if (apprentice) apprentice.files.push(dbFileToApp(row));
+  });
   activeId = activeId && byId.has(activeId) ? activeId : state.apprentices[0]?.id || null;
   state.apprentices.forEach(ensureApprenticeShape);
   setCloudStatus(`Live mode connected: ${state.apprentices.length} apprentices, ${(progressRows || []).length} saved checkoffs`);
@@ -757,6 +781,7 @@ async function loadApprenticeLinkData() {
   let progressRows;
   let questionRows;
   let oneOnOneRows;
+  let fileRows;
   let resourceRows;
   try {
     const results = await withTimeout(
@@ -764,6 +789,7 @@ async function loadApprenticeLinkData() {
         rpcWithApprenticeToken("get_apprentice_by_token"),
         rpcWithApprenticeToken("get_progress_by_token"),
         rpcWithApprenticeToken("get_questions_by_token"),
+        rpcWithApprenticeToken("get_files_by_token"),
         cloudClient.from("resources").select("*").order("sort_order").order("title"),
       ]),
       "Apprentice link load timed out.",
@@ -773,7 +799,8 @@ async function loadApprenticeLinkData() {
     apprenticeError = results[0].error;
     progressRows = results[1].data;
     questionRows = results[2].data;
-    resourceRows = results[3].data;
+    fileRows = results[3].data;
+    resourceRows = results[4].data;
   } catch (error) {
     state.apprentices = [];
     activeId = null;
@@ -795,6 +822,7 @@ async function loadApprenticeLinkData() {
     apprentice.progress[row.task_key] = dbProgressToApp(row);
   });
   apprentice.questions = (questionRows || []).map(dbQuestionToApp);
+  apprentice.files = (fileRows || []).map(dbFileToApp);
   const oneOnOneResult = await rpcWithApprenticeToken("get_one_on_ones_by_token").catch((error) => ({ error }));
   apprentice.oneOnOnes = oneOnOneResult?.error ? [] : (oneOnOneResult.data || []).map(dbOneOnOneToApp);
   state.apprentices = [apprentice];
@@ -862,7 +890,7 @@ function renderApprenticeList() {
         <button class="apprentice-item ${apprentice.id === activeId ? "active" : ""}" data-id="${apprentice.id}" type="button">
           <strong>${escapeHtml(apprentice.name)}</strong>
           <span class="muted">${percent}% complete</span>
-          <span class="mini-progress" aria-hidden="true"><span style="width:${percent}%"></span></span>
+          <span class="mini-progress" aria-hidden="true"><span class="${progressTone(percent)}" style="width:${percent}%"></span></span>
         </button>
       `;
     })
@@ -878,7 +906,7 @@ function renderLevelSummary(apprentice) {
       <div class="level-pill">
         <strong>${escapeHtml(level.title.split(":")[0])}</strong>
         <span>${complete} of ${total} checked off</span>
-        <div class="level-progress" aria-hidden="true"><span style="width:${percent}%"></span></div>
+        <div class="level-progress" aria-hidden="true"><span class="${progressTone(percent)}" style="width:${percent}%"></span></div>
       </div>
     `;
   }).join("");
@@ -1154,15 +1182,19 @@ function addFiles(files) {
   if (!apprentice) return;
   [...files].forEach((file) => {
     const reader = new FileReader();
-    reader.onload = () => {
-      apprentice.files.unshift({
-        id: crypto.randomUUID(),
+    reader.onload = async () => {
+      const uploadedFile = {
+        id: `temp-${crypto.randomUUID()}`,
         name: file.name,
         type: file.type,
         size: file.size,
         dataUrl: reader.result,
         addedAt: new Date().toISOString(),
-      });
+      };
+      apprentice.files.unshift(uploadedFile);
+      saveState();
+      renderFiles(apprentice);
+      await saveFileCloud(apprentice, uploadedFile);
       saveState();
       renderFiles(apprentice);
     };
@@ -1255,6 +1287,26 @@ async function saveNoteCloud(apprentice, note) {
     const { data } = await cloudClient.from("staff_notes").insert(payload).select("*").single();
     if (data) Object.assign(note, dbNoteToApp(data));
   }
+}
+
+async function saveFileCloud(apprentice, file) {
+  if (!cloudReady || !staffSession) {
+    setCloudStatus("File added on this screen, but live saving is not connected.");
+    return;
+  }
+  const result = await trackCloudSave(
+    cloudClient.rpc("save_file_staff", {
+      input_file_id: isUuid(file.id) ? file.id : null,
+      input_apprentice_id: apprentice.id,
+      input_file_name: file.name || "file",
+      input_file_type: file.type || "file",
+      input_file_size: file.size || 0,
+      input_data_url: file.dataUrl || "",
+    }),
+    "Saving file",
+  );
+  const savedRow = Array.isArray(result.data) ? result.data[0] : result.data;
+  if (savedRow) Object.assign(file, dbFileToApp(savedRow));
 }
 
 async function saveOneOnOneCloud(apprentice, meeting) {
@@ -1598,11 +1650,14 @@ els.profileFileUpload.addEventListener("change", (event) => {
   event.target.value = "";
 });
 
-els.filesList.addEventListener("click", (event) => {
+els.filesList.addEventListener("click", async (event) => {
   if (isApprenticeMode) return;
   if (!event.target.matches("[data-action='delete-file']")) return;
   const apprentice = activeApprentice();
   const id = event.target.closest("[data-file]").dataset.file;
+  if (cloudReady && staffSession && isUuid(id)) {
+    await trackCloudSave(cloudClient.rpc("delete_file_staff", { input_file_id: id }), "Deleting file");
+  }
   apprentice.files = apprentice.files.filter((file) => file.id !== id);
   saveState();
   renderFiles(apprentice);
