@@ -622,6 +622,17 @@ function progressTone(percent) {
   return "progress-orange";
 }
 
+function savedCheckoffCount() {
+  return state.apprentices.reduce(
+    (total, apprentice) => total + Object.values(apprentice.progress || {}).filter((item) => item?.complete).length,
+    0,
+  );
+}
+
+function setLiveConnectedStatus() {
+  setCloudStatus(`Live mode connected: ${state.apprentices.length} apprentices, ${savedCheckoffCount()} saved checkoffs`);
+}
+
 function allTaskIds(levelId = null) {
   return LEVELS.filter((level) => !levelId || level.id === levelId).flatMap((level) =>
     level.sections.flatMap((section) => section.tasks.map((task) => taskId(level.id, section.name, task))),
@@ -769,7 +780,7 @@ async function loadStaffData() {
   });
   activeId = activeId && byId.has(activeId) ? activeId : state.apprentices[0]?.id || null;
   state.apprentices.forEach(ensureApprenticeShape);
-  setCloudStatus(`Live mode connected: ${state.apprentices.length} apprentices, ${(progressRows || []).length} saved checkoffs`);
+  setLiveConnectedStatus();
 }
 
 async function loadApprenticeLinkData() {
@@ -1703,12 +1714,17 @@ els.deleteApprentice.addEventListener("click", async () => {
   const apprentice = activeApprentice();
   if (!apprentice || !confirm(`Delete ${apprentice.name}?`)) return;
   if (cloudReady && staffSession) {
-    await cloudClient.from("apprentices").delete().eq("id", apprentice.id);
+    const { error } = await trackCloudSave(
+      cloudClient.rpc("delete_apprentice_staff", { input_apprentice_id: apprentice.id }),
+      "Deleting apprentice",
+    );
+    if (error) return;
   }
   state.apprentices = state.apprentices.filter((item) => item.id !== apprentice.id);
   activeId = state.apprentices[0]?.id || null;
   saveState();
   render();
+  if (cloudReady) setLiveConnectedStatus();
 });
 
 els.themeToggle.addEventListener("click", () => {

@@ -144,15 +144,18 @@ label {
   height: auto;
 }
 
-.logo-dark {
+.logo-dark,
+img.logo-dark {
   display: none;
 }
 
-:root[data-theme="dark"] .logo-light {
+:root[data-theme="dark"] .logo-light,
+:root[data-theme="dark"] img.logo-light {
   display: none;
 }
 
-:root[data-theme="dark"] .logo-dark {
+:root[data-theme="dark"] .logo-dark,
+:root[data-theme="dark"] img.logo-dark {
   display: block;
 }
 
@@ -251,6 +254,21 @@ body.auth-required .app-shell {
 }
 
 body.apprentice-mode .apprentice-link-brand {
+  display: block;
+}
+
+.brand-logo.logo-dark,
+.login-logo.logo-dark {
+  display: none;
+}
+
+:root[data-theme="dark"] .brand-logo.logo-light,
+:root[data-theme="dark"] .login-logo.logo-light {
+  display: none;
+}
+
+:root[data-theme="dark"] .brand-logo.logo-dark,
+:root[data-theme="dark"] .login-logo.logo-dark {
   display: block;
 }
 
