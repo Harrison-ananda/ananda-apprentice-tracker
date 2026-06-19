@@ -712,6 +712,14 @@ body.apprentice-mode .apprentice-link-brand {
   font-weight: 750;
 }
 
+.task-details [data-custom-field] {
+  background: rgba(245, 129, 32, 0.06);
+}
+
+.task-details textarea[data-custom-field="description"] {
+  min-height: 78px;
+}
+
 .details-button {
   width: 42px;
   min-width: 42px;

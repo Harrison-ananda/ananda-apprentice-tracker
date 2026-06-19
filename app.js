@@ -264,10 +264,10 @@ const els = {
 };
 
 function loadState() {
-  const fallback = { apprentices: [], activeId: null, theme: "light", resources: DEFAULT_RESOURCES };
+  const fallback = { apprentices: [], activeId: null, theme: "light", resources: DEFAULT_RESOURCES, taskCustomizations: {} };
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    return { ...fallback, ...saved, resources: mergeDefaultResources(saved?.resources) };
+    return { ...fallback, ...saved, resources: mergeDefaultResources(saved?.resources), taskCustomizations: saved?.taskCustomizations || {} };
   } catch {
     return fallback;
   }
@@ -477,6 +477,13 @@ function dbFileToApp(row) {
     size: row.file_size || 0,
     dataUrl: row.data_url || "",
     addedAt: row.created_at || new Date().toISOString(),
+  };
+}
+
+function dbTaskCustomizationToApp(row) {
+  return {
+    title: row.title || "",
+    description: row.description || "",
   };
 }
 
@@ -717,6 +724,7 @@ async function loadStaffData() {
   let oneOnOneRows;
   let fileRows;
   let resourceRows;
+  let taskCustomizationRows;
   try {
     const results = await withTimeout(
       Promise.all([
@@ -727,6 +735,7 @@ async function loadStaffData() {
         cloudClient.rpc("get_staff_one_on_ones"),
         cloudClient.rpc("get_staff_files"),
         cloudClient.from("resources").select("*").order("sort_order").order("title"),
+        cloudClient.rpc("get_task_customizations"),
       ]),
       "Tracker data load timed out.",
       15000,
@@ -740,7 +749,8 @@ async function loadStaffData() {
     oneOnOneRows = results[4].data;
     fileRows = results[5].data;
     resourceRows = results[6].data;
-    const loadError = results.find((result) => result.error)?.error;
+    taskCustomizationRows = results[7].data;
+    const loadError = results.filter((_, index) => index !== 7).find((result) => result.error)?.error;
     if (loadError) throw new Error(loadError.message);
   } catch (error) {
     if (run !== staffLoadRun) return;
@@ -757,6 +767,10 @@ async function loadStaffData() {
 
   state.apprentices = (apprenticeRows || []).map(dbApprenticeToApp);
   state.resources = (resourceRows || []).map(dbResourceToApp);
+  state.taskCustomizations = {};
+  (taskCustomizationRows || []).forEach((row) => {
+    state.taskCustomizations[row.task_key] = dbTaskCustomizationToApp(row);
+  });
   const byId = new Map(state.apprentices.map((apprentice) => [apprentice.id, apprentice]));
   (progressRows || []).forEach((row) => {
     const apprentice = byId.get(row.apprentice_id);
@@ -794,6 +808,7 @@ async function loadApprenticeLinkData() {
   let oneOnOneRows;
   let fileRows;
   let resourceRows;
+  let taskCustomizationRows;
   try {
     const results = await withTimeout(
       Promise.all([
@@ -802,6 +817,7 @@ async function loadApprenticeLinkData() {
         rpcWithApprenticeToken("get_questions_by_token"),
         rpcWithApprenticeToken("get_files_by_token"),
         cloudClient.from("resources").select("*").order("sort_order").order("title"),
+        cloudClient.rpc("get_task_customizations"),
       ]),
       "Apprentice link load timed out.",
       12000,
@@ -812,6 +828,7 @@ async function loadApprenticeLinkData() {
     questionRows = results[2].data;
     fileRows = results[3].data;
     resourceRows = results[4].data;
+    taskCustomizationRows = results[5].data;
   } catch (error) {
     state.apprentices = [];
     activeId = null;
@@ -838,6 +855,10 @@ async function loadApprenticeLinkData() {
   apprentice.oneOnOnes = oneOnOneResult?.error ? [] : (oneOnOneResult.data || []).map(dbOneOnOneToApp);
   state.apprentices = [apprentice];
   state.resources = (resourceRows || []).map(dbResourceToApp);
+  state.taskCustomizations = {};
+  (taskCustomizationRows || []).forEach((row) => {
+    state.taskCustomizations[row.task_key] = dbTaskCustomizationToApp(row);
+  });
   activeId = apprentice.id;
   ensureApprenticeShape(apprentice);
   apprenticeLinkError = "";
@@ -934,12 +955,27 @@ function renderLevels(apprentice) {
           .map((task) => {
             const id = taskId(level.id, section.name, task);
             const item = apprentice.progress[id] || {};
+            const customization = state.taskCustomizations?.[id] || {};
+            const displayTitle = customization.title || task;
+            const displayDescription = customization.description || section.name;
+            const customFields = isApprenticeMode
+              ? ""
+              : `
+                <label>
+                  Checklist title
+                  <input type="text" value="${escapeAttr(displayTitle)}" data-custom-field="title" placeholder="${escapeAttr(task)}" />
+                </label>
+                <label>
+                  Description
+                  <textarea data-custom-field="description" placeholder="${escapeAttr(section.name)}">${escapeHtml(displayDescription)}</textarea>
+                </label>
+              `;
             return `
               <div class="task-row ${item.complete ? "complete" : ""}" data-task="${id}">
-                <input type="checkbox" ${item.complete ? "checked" : ""} ${isApprenticeMode ? "disabled" : ""} aria-label="Mark ${escapeHtml(task)} complete" data-field="complete" />
+                <input type="checkbox" ${item.complete ? "checked" : ""} ${isApprenticeMode ? "disabled" : ""} aria-label="Mark ${escapeHtml(displayTitle)} complete" data-field="complete" />
                 <div class="task-title">
-                  <strong>${escapeHtml(task)}</strong>
-                  <span>${escapeHtml(section.name)}</span>
+                  <strong>${escapeHtml(displayTitle)}</strong>
+                  <span>${escapeHtml(displayDescription)}</span>
                 </div>
                 <label>
                   Date
@@ -956,9 +992,10 @@ function renderLevels(apprentice) {
                     <input type="text" value="${escapeAttr(item.method || "")}" data-field="method" placeholder="Class, model day, shadowing..." ${isApprenticeMode ? "disabled" : ""} />
                   </label>
                   <label>
-                    Notes
+                    Progress note
                     <textarea data-field="notes" placeholder="What happened, feedback, next step" ${isApprenticeMode ? "disabled" : ""}>${escapeHtml(item.notes || "")}</textarea>
                   </label>
+                  ${customFields}
                 </div>
               </div>
             `;
@@ -1185,6 +1222,7 @@ async function updateTask(taskKey, field, value, sourceRow = null) {
   saveState();
   sourceRow?.classList.toggle("complete", Boolean(apprentice.progress[taskKey].complete));
   updateProgressDisplay(apprentice);
+  if (field === "complete") renderLevels(apprentice);
   await saveTaskCloud(apprentice, taskKey);
 }
 
@@ -1253,6 +1291,19 @@ async function saveResourceCloud(resource) {
     const { data } = await cloudClient.from("resources").insert(payload).select("*").single();
     if (data) Object.assign(resource, dbResourceToApp(data));
   }
+}
+
+async function saveTaskCustomizationCloud(taskKey) {
+  if (!cloudReady || !staffSession) return;
+  const customization = state.taskCustomizations?.[taskKey] || {};
+  await trackCloudSave(
+    cloudClient.rpc("save_task_customization_staff", {
+      input_task_key: taskKey,
+      input_title: customization.title || "",
+      input_description: customization.description || "",
+    }),
+    "Saving checklist wording",
+  );
 }
 
 async function saveQuestionCloud(apprentice, question) {
@@ -1437,7 +1488,19 @@ els.levelsPanel.addEventListener(
 els.levelsPanel.addEventListener("input", (event) => {
   if (isApprenticeMode) return;
   const row = event.target.closest("[data-task]");
-  if (!row || !["notes", "method", "taughtBy"].includes(event.target.dataset.field)) return;
+  if (!row) return;
+  if (event.target.dataset.customField) {
+    state.taskCustomizations[row.dataset.task] ||= {};
+    state.taskCustomizations[row.dataset.task][event.target.dataset.customField] = event.target.value;
+    const title = row.querySelector(".task-title strong");
+    const description = row.querySelector(".task-title span");
+    if (event.target.dataset.customField === "title" && title) title.textContent = event.target.value;
+    if (event.target.dataset.customField === "description" && description) description.textContent = event.target.value;
+    saveState();
+    saveTaskCustomizationCloud(row.dataset.task);
+    return;
+  }
+  if (!["notes", "method", "taughtBy"].includes(event.target.dataset.field)) return;
   const apprentice = activeApprentice();
   apprentice.progress[row.dataset.task] ||= {};
   apprentice.progress[row.dataset.task][event.target.dataset.field] = event.target.value;
