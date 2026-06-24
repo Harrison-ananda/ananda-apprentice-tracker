@@ -210,6 +210,7 @@ let activeId = route.get("apprentice") || state.activeId || state.apprentices[0]
 let openLevelIds = new Set();
 let apprenticeLinkError = "";
 let undoSnapshot = null;
+let recoveryMode = window.location.hash.includes("type=recovery");
 
 const els = {
   apprenticeList: document.querySelector("#apprenticeList"),
@@ -218,7 +219,13 @@ const els = {
   loginScreenForm: document.querySelector("#loginScreenForm"),
   loginEmail: document.querySelector("#loginEmail"),
   loginPassword: document.querySelector("#loginPassword"),
+  forgotPassword: document.querySelector("#forgotPassword"),
   loginMessage: document.querySelector("#loginMessage"),
+  passwordResetScreen: document.querySelector("#passwordResetScreen"),
+  passwordResetForm: document.querySelector("#passwordResetForm"),
+  newPassword: document.querySelector("#newPassword"),
+  confirmNewPassword: document.querySelector("#confirmNewPassword"),
+  passwordResetMessage: document.querySelector("#passwordResetMessage"),
   authPanel: document.querySelector("#authPanel"),
   loginForm: document.querySelector("#loginForm"),
   staffEmail: document.querySelector("#staffEmail"),
@@ -339,6 +346,9 @@ function setupAuthListener() {
   authListenerReady = true;
   cloudClient.auth.onAuthStateChange(async (event, session) => {
     staffSession = session;
+    if (event === "PASSWORD_RECOVERY") {
+      recoveryMode = true;
+    }
     renderAuth();
     if (event === "SIGNED_OUT") {
       clearStaffView();
@@ -665,6 +675,11 @@ async function initApp() {
   const { data } = await cloudClient.auth.getSession();
   staffSession = data.session;
   renderAuth();
+  if (recoveryMode && staffSession) {
+    if (els.passwordResetMessage) els.passwordResetMessage.textContent = "Enter your new password to finish resetting access.";
+    render();
+    return;
+  }
   if (staffSession) {
     await loadStaffData();
   } else {
@@ -675,8 +690,10 @@ async function initApp() {
 
 function renderAuth() {
   const needsStaffLogin = Boolean(cloudClient && !staffSession && !isApprenticeMode);
-  document.body.classList.toggle("auth-required", needsStaffLogin);
-  els.loginScreen?.classList.toggle("hidden", !needsStaffLogin);
+  const needsPasswordReset = Boolean(cloudClient && recoveryMode && staffSession && !isApprenticeMode);
+  document.body.classList.toggle("auth-required", needsStaffLogin || needsPasswordReset);
+  els.loginScreen?.classList.toggle("hidden", !needsStaffLogin || needsPasswordReset);
+  els.passwordResetScreen?.classList.toggle("hidden", !needsPasswordReset);
   els.authPanel?.classList.toggle("hidden", isApprenticeMode);
   els.loginForm?.classList.add("hidden");
   els.authStatus?.classList.toggle("hidden", !staffSession);
@@ -1846,6 +1863,78 @@ async function handleStaffLogin(emailField, passwordField) {
   await loadStaffData();
   render();
 }
+
+function passwordResetRedirectUrl() {
+  const url = new URL(cloudConfig.appBaseUrl || window.location.href);
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
+async function requestPasswordReset() {
+  await ensureCloudClient();
+  if (!cloudClient) {
+    if (els.loginMessage) els.loginMessage.textContent = "Live setup could not load Supabase. Refresh once.";
+    return;
+  }
+  const email = els.loginEmail?.value.trim() || els.staffEmail?.value.trim();
+  if (!email) {
+    if (els.loginMessage) els.loginMessage.textContent = "Enter your email first, then click forgot password.";
+    return;
+  }
+  if (els.loginMessage) els.loginMessage.textContent = "Sending password reset email...";
+  const { error } = await cloudClient.auth.resetPasswordForEmail(email, {
+    redirectTo: passwordResetRedirectUrl(),
+  });
+  if (error) {
+    if (els.loginMessage) els.loginMessage.textContent = `Could not send reset email: ${error.message}`;
+    return;
+  }
+  if (els.loginMessage) els.loginMessage.textContent = "Password reset email sent. Use the newest email link.";
+}
+
+async function saveNewPassword() {
+  await ensureCloudClient();
+  if (!cloudClient) {
+    if (els.passwordResetMessage) els.passwordResetMessage.textContent = "Live setup could not load Supabase. Refresh once.";
+    return;
+  }
+  const password = els.newPassword?.value || "";
+  const confirmPassword = els.confirmNewPassword?.value || "";
+  if (password.length < 8) {
+    if (els.passwordResetMessage) els.passwordResetMessage.textContent = "Use at least 8 characters for the new password.";
+    return;
+  }
+  if (password !== confirmPassword) {
+    if (els.passwordResetMessage) els.passwordResetMessage.textContent = "Those passwords do not match yet.";
+    return;
+  }
+  if (els.passwordResetMessage) els.passwordResetMessage.textContent = "Saving new password...";
+  const { data, error } = await cloudClient.auth.updateUser({ password });
+  if (error) {
+    if (els.passwordResetMessage) els.passwordResetMessage.textContent = `Could not save password: ${error.message}`;
+    return;
+  }
+  recoveryMode = false;
+  staffSession = data.user ? (await cloudClient.auth.getSession()).data.session : staffSession;
+  if (els.newPassword) els.newPassword.value = "";
+  if (els.confirmNewPassword) els.confirmNewPassword.value = "";
+  const cleanUrl = new URL(passwordResetRedirectUrl());
+  history.replaceState({}, document.title, `${cleanUrl.pathname}${cleanUrl.search}`);
+  setCloudStatus("Password updated. You are signed in.");
+  renderAuth();
+  await loadStaffData();
+  render();
+}
+
+els.forgotPassword?.addEventListener("click", async () => {
+  await requestPasswordReset();
+});
+
+els.passwordResetForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await saveNewPassword();
+});
 
 els.loginScreenForm?.addEventListener("submit", async (event) => {
   event.preventDefault();

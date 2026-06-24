@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>ananda apprentice growth tracker</title>
-    <link rel="stylesheet" href="styles.css?v=20260515-github" />
+    <link rel="stylesheet" href="styles.css?v=20260624-reset" />
   </head>
   <body>
     <section class="login-screen hidden" id="loginScreen" aria-label="Staff login">
@@ -21,8 +21,28 @@
           <input id="loginPassword" name="loginPassword" type="password" placeholder="Password" autocomplete="current-password" />
           <button type="submit">Log in</button>
         </form>
+        <button class="text-button" id="forgotPassword" type="button">Forgot password?</button>
         <p class="muted" id="loginMessage">Live mode: staff login required</p>
-        <p class="version-stamp">version 2026.05.15.github</p>
+        <p class="version-stamp">version 2026.06.24.reset</p>
+      </div>
+    </section>
+
+    <section class="login-screen hidden" id="passwordResetScreen" aria-label="Reset staff password">
+      <div class="login-card">
+        <img class="login-logo logo-light" src="ananda-logo-black.svg" alt="ananda hair studio" />
+        <img class="login-logo logo-dark" src="ananda-logo-white.svg" alt="ananda hair studio" />
+        <p class="eyebrow">staff access</p>
+        <h1>set a new password</h1>
+        <p class="login-intro">Choose a new password for your staff login.</p>
+        <form id="passwordResetForm" class="login-form">
+          <label for="newPassword">New password</label>
+          <input id="newPassword" name="newPassword" type="password" placeholder="New password" autocomplete="new-password" />
+          <label for="confirmNewPassword">Confirm password</label>
+          <input id="confirmNewPassword" name="confirmNewPassword" type="password" placeholder="Confirm password" autocomplete="new-password" />
+          <button type="submit">Save new password</button>
+        </form>
+        <p class="muted" id="passwordResetMessage">Enter your new password to finish resetting access.</p>
+        <p class="version-stamp">version 2026.06.24.reset</p>
       </div>
     </section>
 
@@ -54,7 +74,7 @@
             <button id="signOut" type="button">Sign out</button>
           </div>
           <p class="muted" id="cloudStatus">Local preview mode</p>
-          <p class="version-stamp">version 2026.05.15.github</p>
+          <p class="version-stamp">version 2026.06.24.reset</p>
         </section>
 
         <form class="add-apprentice" id="addApprenticeForm">
@@ -208,8 +228,8 @@
       <article class="level-card"></article>
     </template>
 
-    <script src="app-config.js?v=20260515-github"></script>
+    <script src="app-config.js?v=20260624-reset"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="app.js?v=20260515-github"></script>
+    <script src="app.js?v=20260624-reset"></script>
   </body>
 </html>

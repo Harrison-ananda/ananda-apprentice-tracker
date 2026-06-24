@@ -192,6 +192,23 @@ img.logo-dark {
   border-color: var(--ink);
 }
 
+.text-button {
+  width: fit-content;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--orange);
+  font-size: 0.95rem;
+  text-align: left;
+  box-shadow: none;
+}
+
+.text-button:hover {
+  color: var(--ink);
+  background: transparent;
+  transform: none;
+}
+
 body.auth-required .app-shell {
   display: none;
 }
