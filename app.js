@@ -214,6 +214,8 @@ let apprenticeLinkError = "";
 let undoSnapshot = null;
 let recoveryMode = window.location.hash.includes("type=recovery");
 let staffInviteDetails = null;
+let draggedTaskKey = "";
+let dragDropTarget = null;
 
 const els = {
   apprenticeList: document.querySelector("#apprenticeList"),
@@ -614,6 +616,12 @@ function taskMetaFromRow(row) {
     sortOrder: Number(row.dataset.taskSort || 0),
     isCustom: row.dataset.taskCustom === "true",
   };
+}
+
+function clearTaskDropIndicators() {
+  els.levelsPanel?.querySelectorAll(".task-row.drop-before, .task-row.drop-after").forEach((row) => {
+    row.classList.remove("drop-before", "drop-after");
+  });
 }
 
 function updateTaskCustomization(taskKey, patch = {}, fallback = {}) {
@@ -1135,6 +1143,11 @@ function renderLevels(apprentice) {
             data-task-sort="${record.sortOrder}"
             data-task-custom="${record.isCustom ? "true" : "false"}"
           >
+            ${
+              isApprenticeMode
+                ? ""
+                : `<button class="drag-handle" type="button" draggable="true" data-action="drag-task" title="Drag to reorder" aria-label="Drag ${escapeAttr(record.title)} to reorder">↕</button>`
+            }
             <input type="checkbox" ${item.complete ? "checked" : ""} ${isApprenticeMode ? "disabled" : ""} aria-label="Mark ${escapeAttr(record.title)} complete" data-field="complete" />
             <div class="task-title">
               <strong>${escapeHtml(record.title)}</strong>
@@ -1569,6 +1582,40 @@ async function moveChecklistTask(taskKey, targetLevelId) {
   setLiveConnectedStatus();
 }
 
+async function reorderChecklistTask(sourceTaskKey, targetTaskKey, placement = "before") {
+  if (isApprenticeMode) return;
+  const sourceRecord = findTaskRecord(sourceTaskKey);
+  const targetRecord = findTaskRecord(targetTaskKey);
+  if (!sourceRecord || !targetRecord || sourceRecord.id === targetRecord.id || sourceRecord.levelId !== targetRecord.levelId) return;
+
+  const reordered = allTaskRecords(sourceRecord.levelId);
+  const sourceIndex = reordered.findIndex((record) => record.id === sourceRecord.id);
+  if (sourceIndex < 0) return;
+
+  const [movedRecord] = reordered.splice(sourceIndex, 1);
+  let insertIndex = reordered.findIndex((record) => record.id === targetRecord.id);
+  if (insertIndex < 0) return;
+  if (placement === "after") insertIndex += 1;
+  reordered.splice(insertIndex, 0, movedRecord);
+
+  reordered.forEach((record, sortOrder) => {
+    updateTaskCustomization(record.id, {
+      title: record.title,
+      description: record.description,
+      levelId: record.levelId,
+      sectionName: record.sectionName || "Custom",
+      sortOrder,
+      isCustom: record.isCustom,
+      isDeleted: false,
+    }, record);
+  });
+  openLevelIds.add(sourceRecord.levelId);
+  saveState();
+  render();
+  await Promise.all(reordered.map((record) => saveTaskCustomizationCloud(record.id)));
+  setLiveConnectedStatus();
+}
+
 async function saveQuestionCloud(apprentice, question) {
   if (!cloudReady) return;
   if (isApprenticeMode && apprenticeToken && !isUuid(question.id)) {
@@ -1773,6 +1820,49 @@ els.levelsPanel.addEventListener("input", (event) => {
   apprentice.progress[row.dataset.task][event.target.dataset.field] = event.target.value;
   saveState();
   saveTaskCloud(apprentice, row.dataset.task);
+});
+
+els.levelsPanel.addEventListener("dragstart", (event) => {
+  if (isApprenticeMode) return;
+  const handle = event.target.closest("[data-action='drag-task']");
+  const row = handle?.closest("[data-task]");
+  if (!row) {
+    event.preventDefault();
+    return;
+  }
+  draggedTaskKey = row.dataset.task;
+  row.classList.add("dragging");
+  event.dataTransfer.effectAllowed = "move";
+  event.dataTransfer.setData("text/plain", draggedTaskKey);
+});
+
+els.levelsPanel.addEventListener("dragover", (event) => {
+  if (isApprenticeMode || !draggedTaskKey) return;
+  const row = event.target.closest("[data-task]");
+  if (!row || row.dataset.task === draggedTaskKey) return;
+  const source = findTaskRecord(draggedTaskKey);
+  if (!source || source.levelId !== row.dataset.taskLevel) return;
+  event.preventDefault();
+  const rect = row.getBoundingClientRect();
+  const placement = event.clientY > rect.top + rect.height / 2 ? "after" : "before";
+  clearTaskDropIndicators();
+  row.classList.add(placement === "after" ? "drop-after" : "drop-before");
+  dragDropTarget = { taskKey: row.dataset.task, placement };
+});
+
+els.levelsPanel.addEventListener("drop", (event) => {
+  if (isApprenticeMode || !draggedTaskKey || !dragDropTarget) return;
+  event.preventDefault();
+  const { taskKey, placement } = dragDropTarget;
+  clearTaskDropIndicators();
+  reorderChecklistTask(draggedTaskKey, taskKey, placement);
+});
+
+els.levelsPanel.addEventListener("dragend", () => {
+  draggedTaskKey = "";
+  dragDropTarget = null;
+  els.levelsPanel.querySelectorAll(".task-row.dragging").forEach((row) => row.classList.remove("dragging"));
+  clearTaskDropIndicators();
 });
 
 els.levelsPanel.addEventListener("click", (event) => {
