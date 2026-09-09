@@ -414,6 +414,23 @@ body.apprentice-mode .apprentice-link-brand {
   overflow-wrap: anywhere;
 }
 
+.staff-invite-form {
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.staff-invite-form button {
+  background: var(--orange);
+  border-color: var(--orange);
+  color: var(--white);
+}
+
+.staff-invite-form .muted {
+  min-height: 1rem;
+}
+
 .backup-tools button,
 .file-import,
 .upload-button {
@@ -754,6 +771,33 @@ body.apprentice-mode .apprentice-link-brand {
 
 .task-details label:last-child {
   grid-column: 1 / -1;
+}
+
+.task-details .custom-description-field {
+  grid-column: 1 / -1;
+}
+
+.task-edit-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.add-task-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  padding: 14px 18px 18px;
+  background: rgba(245, 129, 32, 0.06);
+  border-top: 1px solid var(--line);
+}
+
+.add-task-form button {
+  height: 45px;
+  background: var(--orange);
+  border-color: var(--orange);
+  color: var(--white);
 }
 
 .panel-heading {
@@ -1116,6 +1160,20 @@ body.apprentice-mode .main {
 
   .details-button {
     width: 100%;
+  }
+
+  .task-edit-actions {
+    justify-content: stretch;
+  }
+
+  .task-edit-actions button,
+  .add-task-form button {
+    width: 100%;
+  }
+
+  .add-task-form {
+    grid-template-columns: 1fr;
+    padding: 14px;
   }
 
   .task-title strong {

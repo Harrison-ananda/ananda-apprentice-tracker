@@ -195,6 +195,8 @@ const state = loadState();
 const route = new URLSearchParams(window.location.search);
 const isApprenticeMode = route.get("view") === "apprentice";
 const apprenticeToken = route.get("token");
+const staffInviteToken = route.get("staffInvite") || route.get("staff_invite");
+const isStaffInviteMode = Boolean(staffInviteToken);
 const cloudConfig = window.ANANDA_APP_CONFIG || {
   supabaseUrl: "https://plxvpthbyyobrfxvhylu.supabase.co",
   supabaseAnonKey: "sb_publishable_8gbbGBF-2h2IeYf97Dak2w_By08DLVE",
@@ -211,6 +213,7 @@ let openLevelIds = new Set();
 let apprenticeLinkError = "";
 let undoSnapshot = null;
 let recoveryMode = window.location.hash.includes("type=recovery");
+let staffInviteDetails = null;
 
 const els = {
   apprenticeList: document.querySelector("#apprenticeList"),
@@ -226,12 +229,25 @@ const els = {
   newPassword: document.querySelector("#newPassword"),
   confirmNewPassword: document.querySelector("#confirmNewPassword"),
   passwordResetMessage: document.querySelector("#passwordResetMessage"),
+  staffInviteScreen: document.querySelector("#staffInviteScreen"),
+  staffInviteIntro: document.querySelector("#staffInviteIntro"),
+  staffInviteSetupForm: document.querySelector("#staffInviteSetupForm"),
+  staffInviteSetupEmail: document.querySelector("#staffInviteSetupEmail"),
+  staffInvitePassword: document.querySelector("#staffInvitePassword"),
+  staffInviteConfirmPassword: document.querySelector("#staffInviteConfirmPassword"),
+  staffInviteLoginForm: document.querySelector("#staffInviteLoginForm"),
+  staffInviteExistingPassword: document.querySelector("#staffInviteExistingPassword"),
+  staffInviteMessage: document.querySelector("#staffInviteMessage"),
   authPanel: document.querySelector("#authPanel"),
   loginForm: document.querySelector("#loginForm"),
   staffEmail: document.querySelector("#staffEmail"),
   staffPassword: document.querySelector("#staffPassword"),
   authStatus: document.querySelector("#authStatus"),
   authEmail: document.querySelector("#authEmail"),
+  staffInviteForm: document.querySelector("#staffInviteForm"),
+  staffInviteName: document.querySelector("#staffInviteName"),
+  staffInviteEmail: document.querySelector("#staffInviteEmail"),
+  staffInviteStatus: document.querySelector("#staffInviteStatus"),
   signOut: document.querySelector("#signOut"),
   cloudStatus: document.querySelector("#cloudStatus"),
   nameField: document.querySelector("#apprenticeName"),
@@ -494,7 +510,121 @@ function dbTaskCustomizationToApp(row) {
   return {
     title: row.title || "",
     description: row.description || "",
+    levelId: row.level_id || "",
+    sectionName: row.section_name || "",
+    sortOrder: Number.isFinite(Number(row.sort_order)) ? Number(row.sort_order) : 0,
+    isCustom: Boolean(row.is_custom),
+    isDeleted: Boolean(row.is_deleted),
   };
+}
+
+function normalizeTaskCustomization(taskKey, fallback = {}) {
+  const customization = state.taskCustomizations?.[taskKey] || {};
+  return {
+    title: customization.title || "",
+    description: customization.description || "",
+    levelId: customization.levelId || customization.level_id || fallback.levelId || "",
+    sectionName: customization.sectionName || customization.section_name || fallback.sectionName || "",
+    sortOrder: Number.isFinite(Number(customization.sortOrder ?? customization.sort_order))
+      ? Number(customization.sortOrder ?? customization.sort_order)
+      : fallback.sortOrder || 0,
+    isCustom: Boolean(customization.isCustom ?? customization.is_custom ?? fallback.isCustom),
+    isDeleted: Boolean(customization.isDeleted ?? customization.is_deleted ?? fallback.isDeleted),
+  };
+}
+
+function taskRecordFromBase(level, section, task, sortOrder) {
+  const id = taskId(level.id, section.name, task);
+  const rawCustomization = state.taskCustomizations?.[id] || {};
+  const customization = normalizeTaskCustomization(id, {
+    levelId: level.id,
+    sectionName: section.name,
+    sortOrder,
+    isCustom: false,
+  });
+  const hasSavedPlacement = Boolean(rawCustomization.levelId || rawCustomization.level_id);
+  const effectiveLevelId = hasSavedPlacement ? customization.levelId : level.id;
+  const effectiveSortOrder = hasSavedPlacement ? customization.sortOrder : sortOrder;
+  return {
+    id,
+    levelId: effectiveLevelId,
+    sectionName: hasSavedPlacement ? customization.sectionName || section.name : section.name,
+    baseTitle: task,
+    baseDescription: section.name,
+    title: customization.title || task,
+    description: customization.description || section.name,
+    sortOrder: effectiveSortOrder,
+    isCustom: false,
+    isDeleted: customization.isDeleted,
+  };
+}
+
+function allTaskRecords(levelId = null, includeDeleted = false) {
+  const records = [];
+  const knownTaskIds = new Set();
+  LEVELS.forEach((level) => {
+    let sortOrder = 0;
+    level.sections.forEach((section) => {
+      section.tasks.forEach((task) => {
+        const record = taskRecordFromBase(level, section, task, sortOrder);
+        sortOrder += 1;
+        knownTaskIds.add(record.id);
+        if (levelId && record.levelId !== levelId) return;
+        if (includeDeleted || !record.isDeleted) records.push(record);
+      });
+    });
+  });
+
+  Object.entries(state.taskCustomizations || {}).forEach(([taskKey, rawCustomization]) => {
+    if (knownTaskIds.has(taskKey)) return;
+    const customization = normalizeTaskCustomization(taskKey, rawCustomization);
+    if (!customization.isCustom) return;
+    if (levelId && customization.levelId !== levelId) return;
+    if (!includeDeleted && customization.isDeleted) return;
+    records.push({
+      id: taskKey,
+      levelId: customization.levelId,
+      sectionName: customization.sectionName || "Custom",
+      baseTitle: customization.title || "Untitled checklist item",
+      baseDescription: customization.description || "Custom checklist item",
+      title: customization.title || "Untitled checklist item",
+      description: customization.description || "Custom checklist item",
+      sortOrder: customization.sortOrder || 1000,
+      isCustom: true,
+      isDeleted: customization.isDeleted,
+    });
+  });
+
+  return records.sort((a, b) => (a.levelId === b.levelId ? a.sortOrder - b.sortOrder : a.levelId.localeCompare(b.levelId)));
+}
+
+function nextCustomTaskSortOrder(levelId) {
+  const existing = allTaskRecords(levelId, true).map((record) => Number(record.sortOrder) || 0);
+  return existing.length ? Math.max(...existing) + 1 : 0;
+}
+
+function findTaskRecord(taskKey) {
+  return allTaskRecords(null, true).find((record) => record.id === taskKey) || null;
+}
+
+function taskMetaFromRow(row) {
+  return {
+    levelId: row.dataset.taskLevel || "",
+    sectionName: row.dataset.taskSection || "",
+    sortOrder: Number(row.dataset.taskSort || 0),
+    isCustom: row.dataset.taskCustom === "true",
+  };
+}
+
+function updateTaskCustomization(taskKey, patch = {}, fallback = {}) {
+  const existing = normalizeTaskCustomization(taskKey, fallback);
+  state.taskCustomizations[taskKey] = {
+    ...existing,
+    ...patch,
+    isCustom: Boolean(patch.isCustom ?? existing.isCustom),
+    isDeleted: Boolean(patch.isDeleted ?? existing.isDeleted),
+  };
+  return state.taskCustomizations[taskKey];
 }
 
 function dbResourceToApp(row) {
@@ -510,13 +640,8 @@ function dbResourceToApp(row) {
 function createApprentice(name) {
   const now = new Date().toISOString();
   const progress = {};
-  LEVELS.forEach((level) => {
-    level.sections.forEach((section) => {
-      section.tasks.forEach((task) => {
-        const id = taskId(level.id, section.name, task);
-        progress[id] = { complete: false, completedOn: "", taughtBy: "", notes: "", method: "" };
-      });
-    });
+  allTaskIds().forEach((id) => {
+    progress[id] = emptyProgressItem();
   });
 
   return {
@@ -533,6 +658,10 @@ function createApprentice(name) {
     createdAt: now,
     updatedAt: now,
   };
+}
+
+function emptyProgressItem() {
+  return { complete: false, completedOn: "", taughtBy: "", notes: "", method: "" };
 }
 
 function taskId(levelId, section, task) {
@@ -617,13 +746,8 @@ function ensureApprenticeShape(apprentice) {
   apprentice.oneOnOnes ||= [];
   apprentice.files ||= [];
   apprentice.progress ||= {};
-  LEVELS.forEach((level) => {
-    level.sections.forEach((section) => {
-      section.tasks.forEach((task) => {
-        const id = taskId(level.id, section.name, task);
-        apprentice.progress[id] ||= { complete: false, completedOn: "", taughtBy: "", notes: "", method: "" };
-      });
-    });
+  allTaskIds().forEach((id) => {
+    apprentice.progress[id] ||= emptyProgressItem();
   });
 }
 
@@ -639,6 +763,13 @@ function progressTone(percent) {
   return "progress-orange";
 }
 
+function levelOptionsHtml(selectedLevelId) {
+  return LEVELS.map((level) => {
+    const label = level.title.split(":")[0];
+    return `<option value="${level.id}" ${level.id === selectedLevelId ? "selected" : ""}>${escapeHtml(label)}</option>`;
+  }).join("");
+}
+
 function savedCheckoffCount() {
   return state.apprentices.reduce(
     (total, apprentice) => total + Object.values(apprentice.progress || {}).filter((item) => item?.complete).length,
@@ -651,9 +782,7 @@ function setLiveConnectedStatus() {
 }
 
 function allTaskIds(levelId = null) {
-  return LEVELS.filter((level) => !levelId || level.id === levelId).flatMap((level) =>
-    level.sections.flatMap((section) => section.tasks.map((task) => taskId(level.id, section.name, task))),
-  );
+  return allTaskRecords(levelId).map((record) => record.id);
 }
 
 async function initApp() {
@@ -669,6 +798,12 @@ async function initApp() {
   if (isApprenticeMode && apprenticeToken) {
     await loadApprenticeLinkData();
     render();
+    return;
+  }
+
+  if (isStaffInviteMode) {
+    await loadStaffInviteSetup();
+    renderAuth();
     return;
   }
 
@@ -691,12 +826,15 @@ async function initApp() {
 function renderAuth() {
   const needsStaffLogin = Boolean(cloudClient && !staffSession && !isApprenticeMode);
   const needsPasswordReset = Boolean(cloudClient && recoveryMode && staffSession && !isApprenticeMode);
-  document.body.classList.toggle("auth-required", needsStaffLogin || needsPasswordReset);
-  els.loginScreen?.classList.toggle("hidden", !needsStaffLogin || needsPasswordReset);
+  const needsStaffInviteSetup = Boolean(cloudClient && isStaffInviteMode);
+  document.body.classList.toggle("auth-required", needsStaffLogin || needsPasswordReset || needsStaffInviteSetup);
+  els.loginScreen?.classList.toggle("hidden", !needsStaffLogin || needsPasswordReset || needsStaffInviteSetup);
   els.passwordResetScreen?.classList.toggle("hidden", !needsPasswordReset);
+  els.staffInviteScreen?.classList.toggle("hidden", !needsStaffInviteSetup);
   els.authPanel?.classList.toggle("hidden", isApprenticeMode);
   els.loginForm?.classList.add("hidden");
   els.authStatus?.classList.toggle("hidden", !staffSession);
+  els.staffInviteForm?.classList.toggle("hidden", !staffSession || isApprenticeMode);
   if (els.authEmail) els.authEmail.textContent = staffSession?.user?.email || "";
 }
 
@@ -966,61 +1104,81 @@ function renderLevels(apprentice) {
     const percent = percentFor(apprentice, level.id);
     if (!openLevelIds.size) openLevelIds.add(apprentice.currentLevel || "level-1");
     const isOpen = openLevelIds.has(level.id);
-    const rows = level.sections
-      .map((section) => {
-        const taskRows = section.tasks
-          .map((task) => {
-            const id = taskId(level.id, section.name, task);
-            const item = apprentice.progress[id] || {};
-            const customization = state.taskCustomizations?.[id] || {};
-            const displayTitle = customization.title || task;
-            const displayDescription = customization.description || section.name;
-            const customFields = isApprenticeMode
-              ? ""
-              : `
-                <label>
-                  Checklist title
-                  <input type="text" value="${escapeAttr(displayTitle)}" data-custom-field="title" placeholder="${escapeAttr(task)}" />
-                </label>
-                <label>
-                  Description
-                  <textarea data-custom-field="description" placeholder="${escapeAttr(section.name)}">${escapeHtml(displayDescription)}</textarea>
-                </label>
-              `;
-            return `
-              <div class="task-row ${item.complete ? "complete" : ""}" data-task="${id}">
-                <input type="checkbox" ${item.complete ? "checked" : ""} ${isApprenticeMode ? "disabled" : ""} aria-label="Mark ${escapeHtml(displayTitle)} complete" data-field="complete" />
-                <div class="task-title">
-                  <strong>${escapeHtml(displayTitle)}</strong>
-                  <span>${escapeHtml(displayDescription)}</span>
-                </div>
-                <label>
-                  Date
-                  <input type="date" value="${escapeAttr(item.completedOn || "")}" data-field="completedOn" ${isApprenticeMode ? "disabled" : ""} />
-                </label>
-                <label>
-                  Taught by
-                  <input type="text" value="${escapeAttr(item.taughtBy || "")}" data-field="taughtBy" placeholder="Name" ${isApprenticeMode ? "disabled" : ""} />
-                </label>
-                <button class="details-button" type="button" data-action="toggle-details" title="Details" aria-label="Show details">⋯</button>
-                <div class="task-details hidden">
-                  <label>
-                    How it was done
-                    <input type="text" value="${escapeAttr(item.method || "")}" data-field="method" placeholder="Class, model day, shadowing..." ${isApprenticeMode ? "disabled" : ""} />
-                  </label>
-                  <label>
-                    Progress note
-                    <textarea data-field="notes" placeholder="What happened, feedback, next step" ${isApprenticeMode ? "disabled" : ""}>${escapeHtml(item.notes || "")}</textarea>
-                  </label>
-                  ${customFields}
-                </div>
-              </div>
-            `;
-          })
-          .join("");
-        return taskRows;
+    const rows = allTaskRecords(level.id)
+      .map((record) => {
+        const item = apprentice.progress[record.id] || {};
+        const customFields = isApprenticeMode
+          ? ""
+          : `
+            <label class="custom-title-field">
+              Checklist title
+              <input type="text" value="${escapeAttr(record.title)}" data-custom-field="title" placeholder="${escapeAttr(record.baseTitle)}" />
+            </label>
+            <label class="custom-description-field">
+              Description
+              <textarea data-custom-field="description" placeholder="${escapeAttr(record.baseDescription)}">${escapeHtml(record.description)}</textarea>
+            </label>
+            <label>
+              Move to level
+              <select data-custom-field="levelId">${levelOptionsHtml(record.levelId)}</select>
+            </label>
+            <div class="task-edit-actions">
+              <button class="danger" type="button" data-action="delete-task">Delete checklist item</button>
+            </div>
+          `;
+        return `
+          <div
+            class="task-row ${item.complete ? "complete" : ""}"
+            data-task="${record.id}"
+            data-task-level="${record.levelId}"
+            data-task-section="${escapeAttr(record.sectionName)}"
+            data-task-sort="${record.sortOrder}"
+            data-task-custom="${record.isCustom ? "true" : "false"}"
+          >
+            <input type="checkbox" ${item.complete ? "checked" : ""} ${isApprenticeMode ? "disabled" : ""} aria-label="Mark ${escapeAttr(record.title)} complete" data-field="complete" />
+            <div class="task-title">
+              <strong>${escapeHtml(record.title)}</strong>
+              <span>${escapeHtml(record.description)}</span>
+            </div>
+            <label>
+              Date
+              <input type="date" value="${escapeAttr(item.completedOn || "")}" data-field="completedOn" ${isApprenticeMode ? "disabled" : ""} />
+            </label>
+            <label>
+              Taught by
+              <input type="text" value="${escapeAttr(item.taughtBy || "")}" data-field="taughtBy" placeholder="Name" ${isApprenticeMode ? "disabled" : ""} />
+            </label>
+            <button class="details-button" type="button" data-action="toggle-details" title="Details" aria-label="Show details">⋯</button>
+            <div class="task-details hidden">
+              <label>
+                How it was done
+                <input type="text" value="${escapeAttr(item.method || "")}" data-field="method" placeholder="Class, model day, shadowing..." ${isApprenticeMode ? "disabled" : ""} />
+              </label>
+              <label>
+                Progress note
+                <textarea data-field="notes" placeholder="What happened, feedback, next step" ${isApprenticeMode ? "disabled" : ""}>${escapeHtml(item.notes || "")}</textarea>
+              </label>
+              ${customFields}
+            </div>
+          </div>
+        `;
       })
       .join("");
+    const addTaskForm = isApprenticeMode
+      ? ""
+      : `
+        <div class="add-task-form staff-only" data-new-task-level="${level.id}">
+          <label>
+            New checklist item
+            <input type="text" data-new-task-field="title" placeholder="Checklist title" />
+          </label>
+          <label>
+            Description
+            <input type="text" data-new-task-field="description" placeholder="What this item is about" />
+          </label>
+          <button type="button" data-action="add-task">Add item</button>
+        </div>
+      `;
 
     return `
       <details class="level-card" data-level="${level.id}" ${isOpen ? "open" : ""}>
@@ -1036,7 +1194,7 @@ function renderLevels(apprentice) {
             <p>level progress</p>
           </div>
         </summary>
-        <div class="task-list">${rows}</div>
+        <div class="task-list">${rows}${addTaskForm}</div>
       </details>
     `;
   }).join("");
@@ -1312,15 +1470,103 @@ async function saveResourceCloud(resource) {
 
 async function saveTaskCustomizationCloud(taskKey) {
   if (!cloudReady || !staffSession) return;
-  const customization = state.taskCustomizations?.[taskKey] || {};
-  await trackCloudSave(
+  const record = findTaskRecord(taskKey);
+  const customization = normalizeTaskCustomization(taskKey, record || {});
+  const result = await trackCloudSave(
     cloudClient.rpc("save_task_customization_staff", {
       input_task_key: taskKey,
       input_title: customization.title || "",
       input_description: customization.description || "",
+      input_level_id: customization.levelId || null,
+      input_section_name: customization.sectionName || null,
+      input_sort_order: customization.sortOrder || 0,
+      input_is_custom: Boolean(customization.isCustom),
+      input_is_deleted: Boolean(customization.isDeleted),
     }),
     "Saving checklist wording",
   );
+  const message = result?.error?.message || "";
+  if (result?.error && !customization.isCustom && !customization.isDeleted && message.includes("function public.save_task_customization_staff")) {
+    await trackCloudSave(
+      cloudClient.rpc("save_task_customization_staff", {
+        input_task_key: taskKey,
+        input_title: customization.title || "",
+        input_description: customization.description || "",
+      }),
+      "Saving checklist wording",
+    );
+  }
+}
+
+async function addChecklistTask(levelId, title, description) {
+  if (isApprenticeMode) return;
+  const cleanTitle = title.trim();
+  const cleanDescription = description.trim() || "Custom checklist item";
+  if (!cleanTitle) {
+    setCloudStatus("Add a checklist title first.");
+    return;
+  }
+  const taskKey = `custom-${crypto.randomUUID()}`;
+  updateTaskCustomization(taskKey, {
+    title: cleanTitle,
+    description: cleanDescription,
+    levelId,
+    sectionName: "Custom",
+    sortOrder: nextCustomTaskSortOrder(levelId),
+    isCustom: true,
+    isDeleted: false,
+  });
+  state.apprentices.forEach((apprentice) => {
+    apprentice.progress ||= {};
+    apprentice.progress[taskKey] ||= emptyProgressItem();
+  });
+  openLevelIds.add(levelId);
+  saveState();
+  render();
+  await saveTaskCustomizationCloud(taskKey);
+  setLiveConnectedStatus();
+}
+
+async function deleteChecklistTask(taskKey) {
+  if (isApprenticeMode) return;
+  const record = findTaskRecord(taskKey);
+  if (!record) return;
+  if (!confirm(`Delete "${record.title}" from the checklist for everyone?`)) return;
+  updateTaskCustomization(taskKey, {
+    title: record.title,
+    description: record.description,
+    levelId: record.levelId,
+    sectionName: record.sectionName,
+    sortOrder: record.sortOrder,
+    isCustom: record.isCustom,
+    isDeleted: true,
+  }, record);
+  openLevelIds.add(record.levelId);
+  saveState();
+  render();
+  await saveTaskCustomizationCloud(taskKey);
+  setLiveConnectedStatus();
+}
+
+async function moveChecklistTask(taskKey, targetLevelId) {
+  if (isApprenticeMode) return;
+  const record = findTaskRecord(taskKey);
+  if (!record || !targetLevelId || record.levelId === targetLevelId) return;
+  updateTaskCustomization(taskKey, {
+    title: record.title,
+    description: record.description,
+    levelId: targetLevelId,
+    sectionName: record.sectionName || "Custom",
+    sortOrder: nextCustomTaskSortOrder(targetLevelId),
+    isCustom: record.isCustom,
+    isDeleted: false,
+  }, record);
+  openLevelIds.add(targetLevelId);
+  openLevelIds.add(record.levelId);
+  saveState();
+  render();
+  await saveTaskCustomizationCloud(taskKey);
+  setLiveConnectedStatus();
 }
 
 async function saveQuestionCloud(apprentice, question) {
@@ -1486,6 +1732,10 @@ els.mentorName.addEventListener("change", () => {
 els.levelsPanel.addEventListener("change", (event) => {
   if (isApprenticeMode) return;
   const row = event.target.closest("[data-task]");
+  if (row && event.target.dataset.customField === "levelId") {
+    moveChecklistTask(row.dataset.task, event.target.value);
+    return;
+  }
   if (!row || !event.target.dataset.field) return;
   const value = event.target.type === "checkbox" ? event.target.checked : event.target.value;
   updateTask(row.dataset.task, event.target.dataset.field, value, row);
@@ -1507,8 +1757,8 @@ els.levelsPanel.addEventListener("input", (event) => {
   const row = event.target.closest("[data-task]");
   if (!row) return;
   if (event.target.dataset.customField) {
-    state.taskCustomizations[row.dataset.task] ||= {};
-    state.taskCustomizations[row.dataset.task][event.target.dataset.customField] = event.target.value;
+    if (event.target.dataset.customField === "levelId") return;
+    updateTaskCustomization(row.dataset.task, { [event.target.dataset.customField]: event.target.value }, taskMetaFromRow(row));
     const title = row.querySelector(".task-title strong");
     const description = row.querySelector(".task-title span");
     if (event.target.dataset.customField === "title" && title) title.textContent = event.target.value;
@@ -1526,6 +1776,23 @@ els.levelsPanel.addEventListener("input", (event) => {
 });
 
 els.levelsPanel.addEventListener("click", (event) => {
+  const deleteButton = event.target.closest("[data-action='delete-task']");
+  if (deleteButton) {
+    const row = deleteButton.closest("[data-task]");
+    if (row) deleteChecklistTask(row.dataset.task);
+    return;
+  }
+
+  const addButton = event.target.closest("[data-action='add-task']");
+  if (addButton) {
+    const form = addButton.closest("[data-new-task-level]");
+    if (!form) return;
+    const title = form.querySelector("[data-new-task-field='title']")?.value || "";
+    const description = form.querySelector("[data-new-task-field='description']")?.value || "";
+    addChecklistTask(form.dataset.newTaskLevel, title, description);
+    return;
+  }
+
   const button = event.target.closest("[data-action='toggle-details']");
   if (!button) return;
   button.closest(".task-row").querySelector(".task-details").classList.toggle("hidden");
@@ -1864,11 +2131,120 @@ async function handleStaffLogin(emailField, passwordField) {
   render();
 }
 
-function passwordResetRedirectUrl() {
+function cleanAppBaseUrl() {
   const url = new URL(cloudConfig.appBaseUrl || window.location.href);
   url.search = "";
   url.hash = "";
   return url.toString();
+}
+
+function passwordResetRedirectUrl() {
+  return cleanAppBaseUrl();
+}
+
+function staffInviteUrl(token = staffInviteToken) {
+  const url = new URL(cleanAppBaseUrl());
+  url.searchParams.set("staffInvite", token);
+  return url.toString();
+}
+
+function setStaffInviteMessage(message) {
+  if (els.staffInviteMessage) els.staffInviteMessage.textContent = message;
+}
+
+function renderStaffInviteSetup() {
+  const email = staffInviteDetails?.email || "";
+  const displayName = staffInviteDetails?.display_name || staffInviteDetails?.displayName || "";
+  const isAccepted = Boolean(staffInviteDetails?.accepted_at);
+  if (els.staffInviteIntro) {
+    els.staffInviteIntro.textContent = email
+      ? `${displayName || "You"} have been invited to help manage apprentice progress for ananda hair studio.`
+      : "This staff invite could not be loaded.";
+  }
+  if (els.staffInviteSetupEmail) els.staffInviteSetupEmail.value = email;
+  els.staffInviteSetupForm?.classList.toggle("hidden", !email || isAccepted);
+  els.staffInviteLoginForm?.classList.toggle("hidden", !email || isAccepted);
+  if (isAccepted) {
+    setStaffInviteMessage("This invite has already been used. You can log in from the main tracker page.");
+  }
+}
+
+async function loadStaffInviteSetup() {
+  const { data } = await cloudClient.auth.getSession();
+  staffSession = data.session;
+  const result = await withTimeout(
+    cloudClient.rpc("get_pending_staff_invite", { input_token: staffInviteToken }),
+    "Staff invite load timed out.",
+    12000,
+  ).catch((error) => ({ error }));
+  if (result.error || !result.data?.length) {
+    staffInviteDetails = null;
+    setStaffInviteMessage(result.error ? `Could not load staff invite: ${result.error.message}` : "This staff invite link could not be opened.");
+    renderStaffInviteSetup();
+    return;
+  }
+  staffInviteDetails = result.data[0];
+  renderStaffInviteSetup();
+  if (staffSession) await acceptStaffInvite();
+}
+
+async function acceptStaffInvite() {
+  if (!cloudClient || !staffSession || !staffInviteToken) return;
+  setStaffInviteMessage("Finishing staff access...");
+  const result = await withTimeout(
+    cloudClient.rpc("accept_staff_invite", { input_token: staffInviteToken }),
+    "Staff invite setup timed out.",
+    12000,
+  ).catch((error) => ({ error }));
+  if (result.error) {
+    setStaffInviteMessage(`Could not finish setup: ${result.error.message}`);
+    return;
+  }
+  setStaffInviteMessage("All set. Opening the tracker...");
+  window.setTimeout(() => {
+    window.location.href = cleanAppBaseUrl();
+  }, 900);
+}
+
+async function createStaffInvite() {
+  await ensureCloudClient();
+  if (!cloudReady || !staffSession || !cloudClient) {
+    if (els.staffInviteStatus) els.staffInviteStatus.textContent = "Log in with staff access first.";
+    return;
+  }
+  const displayName = els.staffInviteName?.value.trim() || "";
+  const email = els.staffInviteEmail?.value.trim().toLowerCase() || "";
+  if (!displayName || !email) {
+    if (els.staffInviteStatus) els.staffInviteStatus.textContent = "Add the staff name and email first.";
+    return;
+  }
+  if (els.staffInviteStatus) els.staffInviteStatus.textContent = "Creating setup link...";
+  const result = await trackCloudSave(
+    cloudClient.rpc("create_staff_invite_staff", {
+      input_email: email,
+      input_display_name: displayName,
+    }),
+    "Creating staff invite",
+  );
+  if (result.error) {
+    if (els.staffInviteStatus) els.staffInviteStatus.textContent = `Could not create invite: ${result.error.message}`;
+    return;
+  }
+  const invite = result.data?.[0];
+  if (!invite?.invite_token) {
+    if (els.staffInviteStatus) els.staffInviteStatus.textContent = "Invite was created, but the setup token was missing. Run the Supabase invite SQL once.";
+    return;
+  }
+  const link = staffInviteUrl(invite?.invite_token);
+  try {
+    await navigator.clipboard.writeText(link);
+    if (els.staffInviteStatus) els.staffInviteStatus.textContent = `Setup link copied for ${email}.`;
+  } catch {
+    prompt("Copy this staff setup link:", link);
+    if (els.staffInviteStatus) els.staffInviteStatus.textContent = `Setup link ready for ${email}.`;
+  }
+  if (els.staffInviteName) els.staffInviteName.value = "";
+  if (els.staffInviteEmail) els.staffInviteEmail.value = "";
 }
 
 async function requestPasswordReset() {
@@ -1929,6 +2305,80 @@ async function saveNewPassword() {
 
 els.forgotPassword?.addEventListener("click", async () => {
   await requestPasswordReset();
+});
+
+els.staffInviteForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await createStaffInvite();
+});
+
+els.staffInviteSetupForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!staffInviteDetails?.email) {
+    setStaffInviteMessage("This invite could not be loaded.");
+    return;
+  }
+  const password = els.staffInvitePassword?.value || "";
+  const confirmPassword = els.staffInviteConfirmPassword?.value || "";
+  if (password.length < 8) {
+    setStaffInviteMessage("Use at least 8 characters for the password.");
+    return;
+  }
+  if (password !== confirmPassword) {
+    setStaffInviteMessage("Those passwords do not match yet.");
+    return;
+  }
+  setStaffInviteMessage("Creating login...");
+  const { data, error } = await cloudClient.auth.signUp({
+    email: staffInviteDetails.email,
+    password,
+    options: {
+      emailRedirectTo: staffInviteUrl(),
+    },
+  });
+  if (error) {
+    const message = error.message || "";
+    if (message.toLowerCase().includes("registered") || message.toLowerCase().includes("already")) {
+      setStaffInviteMessage("That email already has a login. Enter the existing password below to finish staff access.");
+      els.staffInviteLoginForm?.classList.remove("hidden");
+      return;
+    }
+    setStaffInviteMessage(`Could not create login: ${message}`);
+    return;
+  }
+  staffSession = data.session;
+  if (els.staffInvitePassword) els.staffInvitePassword.value = "";
+  if (els.staffInviteConfirmPassword) els.staffInviteConfirmPassword.value = "";
+  if (staffSession) {
+    await acceptStaffInvite();
+  } else {
+    setStaffInviteMessage("Almost there. Check that email for a confirmation link, then this invite will finish setup.");
+  }
+});
+
+els.staffInviteLoginForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!staffInviteDetails?.email) {
+    setStaffInviteMessage("This invite could not be loaded.");
+    return;
+  }
+  const password = els.staffInviteExistingPassword?.value || "";
+  if (!password) {
+    setStaffInviteMessage("Enter the existing password to finish setup.");
+    return;
+  }
+  setStaffInviteMessage("Logging in...");
+  const { data, error } = await cloudClient.auth.signInWithPassword({
+    email: staffInviteDetails.email,
+    password,
+  });
+  if (error) {
+    setStaffInviteMessage(`Could not log in: ${error.message}`);
+    return;
+  }
+  staffSession = data.session;
+  if (els.staffInviteExistingPassword) els.staffInviteExistingPassword.value = "";
+  await acceptStaffInvite();
 });
 
 els.passwordResetForm?.addEventListener("submit", async (event) => {
