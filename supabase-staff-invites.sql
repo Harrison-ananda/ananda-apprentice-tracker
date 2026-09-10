@@ -1,13 +1,13 @@
 -- ananda apprentice tracker staff invite links
 -- Run this once in Supabase SQL Editor after pushing the app update.
 
-create extension if not exists pgcrypto;
+create extension if not exists pgcrypto with schema extensions;
 
 create table if not exists public.staff_invites (
   id uuid primary key default gen_random_uuid(),
   email text not null unique,
   display_name text not null default '',
-  invite_token text not null unique default encode(gen_random_bytes(32), 'hex'),
+  invite_token text not null unique default encode(extensions.gen_random_bytes(32), 'hex'),
   accepted_by uuid references auth.users(id) on delete set null,
   accepted_at timestamptz,
   created_at timestamptz not null default now(),
@@ -71,14 +71,14 @@ begin
   values (
     clean_email,
     clean_name,
-    encode(gen_random_bytes(32), 'hex'),
+    encode(extensions.gen_random_bytes(32), 'hex'),
     null,
     null,
     now()
   )
   on conflict (email) do update set
     display_name = excluded.display_name,
-    invite_token = encode(gen_random_bytes(32), 'hex'),
+    invite_token = encode(extensions.gen_random_bytes(32), 'hex'),
     accepted_by = null,
     accepted_at = null,
     updated_at = now()
