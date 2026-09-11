@@ -76,7 +76,7 @@ begin
     null,
     now()
   )
-  on conflict (email) do update set
+  on conflict on constraint staff_invites_email_key do update set
     display_name = excluded.display_name,
     invite_token = encode(extensions.gen_random_bytes(32), 'hex'),
     accepted_by = null,
