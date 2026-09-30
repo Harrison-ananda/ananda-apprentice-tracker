@@ -218,6 +218,7 @@ let draggedTaskKey = "";
 let dragDropTarget = null;
 
 const els = {
+  sidebar: document.querySelector(".sidebar"),
   apprenticeList: document.querySelector("#apprenticeList"),
   addForm: document.querySelector("#addApprenticeForm"),
   loginScreen: document.querySelector("#loginScreen"),
@@ -2392,6 +2393,23 @@ async function saveNewPassword() {
   await loadStaffData();
   render();
 }
+
+function canScrollVertically(element, deltaY, deltaX = 0) {
+  if (!element || Math.abs(deltaY) < Math.abs(deltaX)) return false;
+  if (deltaY < 0) return element.scrollTop > 0;
+  return element.scrollTop + element.clientHeight < element.scrollHeight - 1;
+}
+
+els.sidebar?.addEventListener(
+  "wheel",
+  (event) => {
+    const scrollTarget = canScrollVertically(els.apprenticeList, event.deltaY, event.deltaX) ? els.apprenticeList : els.sidebar;
+    if (!canScrollVertically(scrollTarget, event.deltaY, event.deltaX)) return;
+    scrollTarget.scrollTop += event.deltaY;
+    event.preventDefault();
+  },
+  { passive: false },
+);
 
 els.forgotPassword?.addEventListener("click", async () => {
   await requestPasswordReset();

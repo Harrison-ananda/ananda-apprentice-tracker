@@ -227,7 +227,9 @@ body.auth-required .app-shell {
   display: flex;
   flex-direction: column;
   gap: 18px;
-  overflow: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   padding: 24px;
   border-right: 1px solid var(--line);
   background:
@@ -238,6 +240,7 @@ body.auth-required .app-shell {
 .brand {
   display: flex;
   flex: 0 0 auto;
+  order: 1;
   align-items: start;
   justify-content: space-between;
   gap: 12px;
@@ -323,12 +326,12 @@ body.apprentice-mode .apprentice-link-brand {
 
 .apprentice-list {
   display: grid;
-  flex: 1 1 180px;
+  order: 4;
+  flex: 0 0 auto;
   gap: 10px;
-  min-height: 120px;
-  overflow: auto;
-  padding: 2px 8px 8px 0;
-  scrollbar-gutter: stable;
+  min-height: 0;
+  overflow: visible;
+  padding: 2px 0 8px;
 }
 
 .apprentice-item {
@@ -390,14 +393,20 @@ body.apprentice-mode .apprentice-link-brand {
 .backup-tools {
   display: grid;
   flex: 0 0 auto;
+  order: 5;
   grid-template-columns: 1fr;
   gap: 8px;
 }
 
 .auth-panel {
   display: grid;
+  order: 6;
   flex: 0 0 auto;
   gap: 10px;
+  max-height: 260px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -406,7 +415,12 @@ body.apprentice-mode .apprentice-link-brand {
 
 .add-apprentice,
 .search-wrap {
+  order: 2;
   flex: 0 0 auto;
+}
+
+.search-wrap {
+  order: 3;
 }
 
 .auth-panel .muted {
@@ -1026,7 +1040,7 @@ body.apprentice-mode .main {
 
   .sidebar {
     position: static;
-    height: auto;
+    max-height: none;
     overflow: visible;
     border-right: 0;
     border-bottom: 1px solid var(--line);
@@ -1034,7 +1048,6 @@ body.apprentice-mode .main {
 
   .apprentice-list {
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    max-height: 260px;
   }
 
   .profile-header,
